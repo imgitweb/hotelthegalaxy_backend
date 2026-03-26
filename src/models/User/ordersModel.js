@@ -36,7 +36,7 @@ const orderItemSchema = new mongoose.Schema(
       min: 0,
     },
   },
-  { _id: false }
+  { _id: false },
 );
 
 const orderAddressSchema = new mongoose.Schema(
@@ -74,7 +74,7 @@ const orderAddressSchema = new mongoose.Schema(
       },
     },
   },
-  { _id: false }
+  { _id: false },
 );
 
 const restaurantLocationSchema = new mongoose.Schema(
@@ -95,7 +95,7 @@ const restaurantLocationSchema = new mongoose.Schema(
       },
     },
   },
-  { _id: false }
+  { _id: false },
 );
 
 const partnerLocationSchema = new mongoose.Schema(
@@ -120,7 +120,7 @@ const partnerLocationSchema = new mongoose.Schema(
       },
     },
   },
-  { _id: false }
+  { _id: false },
 );
 
 const orderSchema = new mongoose.Schema(
@@ -175,7 +175,6 @@ const orderSchema = new mongoose.Schema(
       index: true,
     },
 
-
     status: {
       type: String,
       enum: [
@@ -193,13 +192,12 @@ const orderSchema = new mongoose.Schema(
 
     prepTimeRemaining: {
       type: Number,
-      default: 0, 
+      default: 0,
     },
 
     eta: {
       type: Number,
       default: 0,
-      index: true,
     },
 
     distance: {
@@ -228,10 +226,21 @@ const orderSchema = new mongoose.Schema(
       },
       transactionId: String,
     },
+    distanceKm: {
+      type: Number,
+      default: 0,
+    },
+
+    pricing: {
+      subtotal: Number,
+      tax: Number,
+      deliveryCharge: Number,
+      total: Number,
+    },
   },
   {
     timestamps: true,
-  }
+  },
 );
 
 orderSchema.pre("save", function (next) {
@@ -245,10 +254,7 @@ orderSchema.pre("save", function (next) {
   if (this.restaurantLocation?.lat && this.restaurantLocation?.lng) {
     this.restaurantLocation.location = {
       type: "Point",
-      coordinates: [
-        this.restaurantLocation.lng,
-        this.restaurantLocation.lat,
-      ],
+      coordinates: [this.restaurantLocation.lng, this.restaurantLocation.lat],
     };
   }
 

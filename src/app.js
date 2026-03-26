@@ -27,15 +27,15 @@ const adminOrderRoutes = require("./routes/admin/adminOrderRoutes");
 const enquiryRoutes = require("./routes/enquiryRoutes")
 const reviewRoutes = require("./routes/reviewRoutes")
 const combsRoute = require("./routes/public/combo.routes");
-const offerRoute = require("./routes/offer.routes");
+const offerRoute = require("./routes/paymentRoutes");
 
 const whatsappRoutes = require("./routes/whatsappRoutes");
 const chatRoutes = require("./routes/chatRoutes")
 
 
-const enquiryRoutes = require("./routes/enquiryRoutes");
-const reviewRoutes = require("./routes/reviewRoutes");
-const combsRoute = require("./routes/public/combo.routes");
+// const enquiryRoutes = require("./routes/enquiryRoutes");
+// const reviewRoutes = require("./routes/reviewRoutes");
+// const combsRoute = require("./routes/public/combo.routes");
 const offerRoutepublic = require("./routes/public/offers.routes");
 const dashboardRoutes = require("./routes/admin/dashboardRoutes");
 const riderRoutes = require("./routes/admin/rider.routes");

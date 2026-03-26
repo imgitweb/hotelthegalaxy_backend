@@ -4,6 +4,15 @@ const DailyRoster = require("../../models/dining/DailyRoster");
 const Combo = require("../../models/dining/combomodel");
 const Review = require("../../models/reviewModel");
 const Address = require("../../models/User/address");
+const getDistanceKm = require("../../utils/distanceService");
+const calculateDeliveryCharge = require("../../utils/deliveryCharge");
+const calculateETA = require("../../utils/calculateETA");
+
+
+const HOTEL_LOCATION = {
+  lat: 22.061401,
+  lng: 78.94776,
+};
 
 exports.createOrder = async (req, res, next) => {
   try {
@@ -15,6 +24,7 @@ exports.createOrder = async (req, res, next) => {
         message: "No items provided",
       });
     }
+
     const selectedAddress = await Address.findById(addressId);
 
     if (!selectedAddress) {
@@ -30,9 +40,7 @@ exports.createOrder = async (req, res, next) => {
     let subtotal = 0;
     const orderItems = [];
 
-    // ✅ PROCESS ITEMS
     for (const item of items) {
-      // 🔒 STRICT VALIDATION
       if (!item.quantity || item.quantity < 1) {
         return res.status(400).json({
           success: false,
@@ -40,7 +48,6 @@ exports.createOrder = async (req, res, next) => {
         });
       }
 
-      // ❌ BOTH OR NONE CHECK
       if (!!item.menuItem === !!item.combo) {
         return res.status(400).json({
           success: false,
@@ -48,9 +55,6 @@ exports.createOrder = async (req, res, next) => {
         });
       }
 
-      // ============================
-      // ✅ MENU ITEM HANDLING
-      // ============================
       if (item.menuItem) {
         const menuItem = await MenuItem.findById(item.menuItem);
 
@@ -66,7 +70,6 @@ exports.createOrder = async (req, res, next) => {
 
         subtotal += total;
 
-        // 🔥 STOCK MANAGEMENT
         const updatedRoster = await DailyRoster.findOneAndUpdate(
           {
             date: today,
@@ -95,9 +98,6 @@ exports.createOrder = async (req, res, next) => {
         });
       }
 
-      // ============================
-      // ✅ COMBO HANDLING (🔥 FIXED)
-      // ============================
       if (item.combo) {
         const combo = await Combo.findById(item.combo);
 
@@ -108,7 +108,7 @@ exports.createOrder = async (req, res, next) => {
           });
         }
 
-        const price = combo.price; // ensure combo has price
+        const price = combo.price;
         const total = price * item.quantity;
 
         subtotal += total;
@@ -123,7 +123,6 @@ exports.createOrder = async (req, res, next) => {
       }
     }
 
-    // 🚨 FINAL SAFETY CHECK
     if (orderItems.length === 0) {
       return res.status(400).json({
         success: false,
@@ -131,20 +130,41 @@ exports.createOrder = async (req, res, next) => {
       });
     }
 
-    // ✅ PRICING
-    const tax = Math.round(subtotal * 0.05);
-    const total = subtotal + tax;
+    const userLocation = {
+      lat: selectedAddress.lat,
+      lng: selectedAddress.lng,
+    };
 
-    // ✅ CREATE ORDER
+    const distanceKm = await getDistanceKm(
+      HOTEL_LOCATION,
+      userLocation
+    );
+
+    const deliveryCharge = calculateDeliveryCharge(distanceKm, subtotal);
+
+    const etaData = await calculateETA({
+      address: userLocation,
+      status: "pending",
+    });
+
+    const tax = Math.round(subtotal * 0.05);
+    const total = subtotal + tax + deliveryCharge;
+
     const order = await Order.create({
       orderNumber: "ORD-" + Date.now(),
       user: req.user.id,
       items: orderItems,
+
       pricing: {
         subtotal,
         tax,
+        deliveryCharge,
         total,
       },
+
+      distanceKm,
+      eta: etaData.eta,
+
       address: {
         street: selectedAddress.street,
         landmark: selectedAddress.landmark,
@@ -152,21 +172,20 @@ exports.createOrder = async (req, res, next) => {
         lng: selectedAddress.lng,
         location: selectedAddress.location,
       },
+
       status: "pending",
     });
-
-    console.log("📦 Order Saved Address:", order.address);
 
     res.status(201).json({
       success: true,
       data: order,
     });
   } catch (error) {
+    console.error("Create Order Error:", error.message);
     next(error);
   }
 };
 
-// ✅ GET MY ORDERS
 exports.getMyOrders = async (req, res, next) => {
   try {
     const orders = await Order.find({ user: req.user.id })
@@ -201,7 +220,6 @@ exports.getMyOrders = async (req, res, next) => {
   }
 };
 
-// ✅ GET ORDER BY ID
 exports.getOrderById = async (req, res, next) => {
   try {
     const order = await Order.findById(req.params.id)
@@ -222,6 +240,12 @@ exports.getOrderById = async (req, res, next) => {
       });
     }
 
+    const etaData = await calculateETA(order);
+    order.eta = etaData.eta;
+    order.distanceKm = etaData.distanceKm;
+
+    await order.save();
+
     res.status(200).json({
       success: true,
       data: order,
@@ -231,7 +255,6 @@ exports.getOrderById = async (req, res, next) => {
   }
 };
 
-// ✅ CANCEL ORDER
 exports.cancelOrder = async (req, res) => {
   try {
     const { orderId } = req.params;
@@ -285,7 +308,6 @@ exports.cancelOrder = async (req, res) => {
   }
 };
 
-// ✅ UPDATE ORDER STATUS
 exports.updateOrderStatus = async (req, res, next) => {
   try {
     const { id } = req.params;
