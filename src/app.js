@@ -24,14 +24,13 @@ const newsletterRoutes = require("./routes/newsletterRoutes");
 const offerRoutes = require("./routes/offerRoutes");
 const combsRoutes = require("./routes/admin/comboRoutes");
 const adminOrderRoutes = require("./routes/admin/adminOrderRoutes");
-const enquiryRoutes = require("./routes/enquiryRoutes")
-const reviewRoutes = require("./routes/reviewRoutes")
-const combsRoute = require("./routes/public/combo.routes");
-const offerRoute = require("./routes/offer.routes");
+// const enquiryRoutes = require("./routes/enquiryRoutes")
+// const reviewRoutes = require("./routes/reviewRoutes")
+// const combsRoute = require("./routes/public/combo.routes");
+const offerRoute = require("./routes/offerRoutes");
 
 const whatsappRoutes = require("./routes/whatsappRoutes");
-const chatRoutes = require("./routes/chatRoutes")
-
+const chatRoutes = require("./routes/chatRoutes");
 
 const enquiryRoutes = require("./routes/enquiryRoutes");
 const reviewRoutes = require("./routes/reviewRoutes");
@@ -44,9 +43,6 @@ const roomRoutes = require("./routes/roomRoutes");
 const path = require("path");
 const router = require("express").Router();
 const app = express();
-
-app.set("trust proxy", 1);
-app.use(helmet());
 app.use(mongoSanitize());
 app.use(xss());
 app.use(compression());
@@ -58,6 +54,13 @@ app.use(httpLogger);
 if (process.env.NODE_ENV === "development") {
   app.use(morgan("dev"));
 }
+
+app.set("trust proxy", 1);
+app.use(
+  helmet({
+    crossOriginResourcePolicy: { policy: "cross-origin" },
+  }),
+);
 
 const allowedOrigins = [
   "http://localhost:3000",
@@ -82,7 +85,11 @@ app.use(
 );
 app.use(
   "/uploads",
-  express.static(path.join(__dirname, "public/uploads"))
+  express.static(path.join(__dirname, "..", "/public/uploads")),
+);
+console.log(
+  "Serving static files from:",
+  path.join(__dirname, "..", "/public/uploads"),
 );
 
 app.use("/api/v1/auth", authRoutes);
@@ -105,26 +112,23 @@ app.use("/api/v1/reviews", reviewRoutes);
 app.use("/api/v1/dining", combsRoute);
 app.use("/api/v1/admin/dining", offerRoute);
 
-
 app.use("/webhook", whatsappRoutes);
-app.use("/api",chatRoutes);
+app.use("/api", chatRoutes);
 
 app.use("/api/v1/dining/offers", offerRoutepublic);
 app.use("/api/v1/admin/dashboard", dashboardRoutes);
 app.use("/api/v1/admin/riders", riderRoutes);
 app.use("/api/v1/admin/staff", staffRoutes);
 app.use("/api/v1/payment", require("./routes/paymentRoutes"));
-app.use("/api/rooms", roomRoutes);
+app.use("/api/v1/rooms", roomRoutes);
 
-
-
-app.use("/api/v1/admin/availability", require("./routes/admin/availabilityRoutes"));
+app.use(
+  "/api/v1/admin/availability",
+  require("./routes/admin/availabilityRoutes"),
+);
 app.use("/api/geocode", require("./routes/geocodeRoutes"));
 
 app.use(notFound);
 app.use(errorHandler);
 
 module.exports = app;
-
-
-
