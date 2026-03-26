@@ -27,11 +27,11 @@ const getDistanceTime = async (origin, destination) => {
         origins: `${origin.lat},${origin.lng}`,
         destinations: `${destination.lat},${destination.lng}`,
         mode: "driving",
-        departure_time: "now",       
+        departure_time: "now",
         traffic_model: "best_guess",
         key: API_KEY,
       },
-    }
+    },
   );
 
   const element = res?.data?.rows?.[0]?.elements?.[0];
@@ -42,14 +42,14 @@ const getDistanceTime = async (origin, destination) => {
   }
 
   const travelSeconds =
-    element?.duration_in_traffic?.value ||
-    element?.duration?.value ||
-    1200; 
+    element?.duration_in_traffic?.value || element?.duration?.value || 1200;
 
   const distanceKm = (element?.distance?.value || 0) / 1000;
 
   console.log(
-    `✅ Travel: ${Math.ceil(travelSeconds / 60)} mins | Distance: ${distanceKm.toFixed(1)} km`
+    `✅ Travel: ${Math.ceil(
+      travelSeconds / 60,
+    )} mins | Distance: ${distanceKm.toFixed(1)} km`,
   );
 
   return { travelSeconds, distanceKm };
@@ -57,24 +57,21 @@ const getDistanceTime = async (origin, destination) => {
 
 const calculateETA = async (order) => {
   try {
-    const {
-      address,
-      status,
-      prepTimeRemaining = 10,
-      prepTime = 20,
-    } = order;
+    const { address, status, prepTimeRemaining = 10, prepTime = 20 } = order;
 
-    if (!address?.lat || !address?.lng) {
+    if (address?.lat == null || address?.lng == null) {
       throw new Error("User coordinates (address.lat / address.lng) missing");
     }
 
     const userLocation = { lat: Number(address.lat), lng: Number(address.lng) };
 
-    if (status === "delivered") return 0;
+    if (status === "delivered") {
+      return { eta: 0, travelMins: 0, distanceKm: 0 };
+    }
 
     const { travelSeconds, distanceKm } = await getDistanceTime(
       HOTEL_LOCATION,
-      userLocation
+      userLocation,
     );
 
     const travelMins = Math.ceil(travelSeconds / 60);
@@ -102,13 +99,15 @@ const calculateETA = async (order) => {
     const finalEta = Math.max(5, Math.ceil(etaMins));
 
     console.log(
-      `🕐 ETA for status "${status}": ${finalEta} mins | Travel: ${travelMins} mins | Prep left: ${prepTimeRemaining} mins | Distance: ${distanceKm.toFixed(1)} km`
+      `🕐 ETA for status "${status}": ${finalEta} mins | Travel: ${travelMins} mins | Prep left: ${prepTimeRemaining} mins | Distance: ${distanceKm.toFixed(
+        1,
+      )} km`,
     );
 
     return { eta: finalEta, travelMins, distanceKm };
   } catch (err) {
-    console.error("💥 ETA Calculation Error:", err.message);
-    return { eta: 15, travelMins: null, distanceKm: null }; 
+    console.error("💥 FULL ERROR:", err.response?.data || err.message);
+    throw err;
   }
 };
 
