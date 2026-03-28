@@ -32,6 +32,11 @@ const menuItemSchema = new mongoose.Schema(
       min: 0,
       index: true,
     },
+      todayPrice: {
+      type: Number,
+      min: 0,
+  
+    },
 
     taxPercent: {
       type: Number,
