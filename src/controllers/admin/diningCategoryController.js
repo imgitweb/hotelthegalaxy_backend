@@ -3,9 +3,18 @@ const slugify = require("slugify");
 const uploadToCloudinary = require("../../utils/cloudUpload");
 const cloudinary = require("cloudinary").v2;
 
+
 const create = async (req, res) => {
   try {
     const { name, description, sortOrder, isActive } = req.body;
+
+    if (!name) {
+      return res.status(400).json({
+        success: false,
+        message: "Category name is required",
+      });
+    }
+
     let imageData = { url: "", public_id: "" };
 
     if (req.file) {
@@ -13,17 +22,34 @@ const create = async (req, res) => {
       imageData = { url: result.secure_url, public_id: result.public_id };
     }
 
+    // ✅ slug generate
+    const baseSlug = slugify(name, { lower: true, strict: true });
+    let slug = baseSlug;
+    let count = 1;
+
+    // ✅ duplicate slug handle
+    while (await DiningCategory.findOne({ slug })) {
+      slug = `${baseSlug}-${count++}`;
+    }
+
     const category = await DiningCategory.create({
       name,
+      slug, // ✅ IMPORTANT
       description,
       image: imageData,
       sortOrder: sortOrder ? Number(sortOrder) : 0,
       isActive: isActive === "false" ? false : true,
     });
 
-    res.status(201).json({ success: true, data: category });
+    res.status(201).json({
+      success: true,
+      data: category,
+    });
   } catch (error) {
-    res.status(400).json({ success: false, message: error.message });
+    res.status(400).json({
+      success: false,
+      message: error.message,
+    });
   }
 };
 

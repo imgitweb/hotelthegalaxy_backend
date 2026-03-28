@@ -18,7 +18,7 @@ const create = async (req, res) => {
     const item = await MenuService.create({
       ...req.body,
       images: imageUrls,
-      isVeg: req.body.isVeg !== "false",
+      isVeg: req.body.isVeg === "true" || req.body.isVeg === true,
       basePrice: Number(req.body.basePrice),
       preparationTime: Number(req.body.preparationTime || 15),
     });
