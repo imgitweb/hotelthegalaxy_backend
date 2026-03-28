@@ -24,17 +24,14 @@ const newsletterRoutes = require("./routes/newsletterRoutes");
 const offerRoutes = require("./routes/offerRoutes");
 const combsRoutes = require("./routes/admin/comboRoutes");
 const adminOrderRoutes = require("./routes/admin/adminOrderRoutes");
-<<<<<<< HEAD
 // const enquiryRoutes = require("./routes/enquiryRoutes")
 // const reviewRoutes = require("./routes/reviewRoutes")
 // const combsRoute = require("./routes/public/combo.routes");
-const offerRoute = require("./routes/offerRoutes");
-=======
+// const offerRoute = require("./routes/offerRoutes");
 const enquiryRoutes = require("./routes/enquiryRoutes")
 const reviewRoutes = require("./routes/reviewRoutes")
 const combsRoute = require("./routes/public/combo.routes");
 const offerRoute = require("./routes/paymentRoutes");
->>>>>>> eb77ea46047bd34c3521e9555bd82e71917fb30b
 
 const whatsappRoutes = require("./routes/whatsappRoutes");
 const chatRoutes = require("./routes/chatRoutes");
