@@ -24,13 +24,6 @@ const newsletterRoutes = require("./routes/newsletterRoutes");
 const offerRoutes = require("./routes/offerRoutes");
 const combsRoutes = require("./routes/admin/comboRoutes");
 const adminOrderRoutes = require("./routes/admin/adminOrderRoutes");
-<<<<<<< HEAD
-=======
-// const enquiryRoutes = require("./routes/enquiryRoutes")
-// const reviewRoutes = require("./routes/reviewRoutes")
-// const combsRoute = require("./routes/public/combo.routes");
-// const offerRoute = require("./routes/offerRoutes");
->>>>>>> 6ed5bff7f0415500de5a0ec804e523b46213237f
 const enquiryRoutes = require("./routes/enquiryRoutes")
 const reviewRoutes = require("./routes/reviewRoutes")
 const combsRoute = require("./routes/public/combo.routes");
