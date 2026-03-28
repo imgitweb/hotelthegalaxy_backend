@@ -1,5 +1,6 @@
 const MenuService = require("../../services/dining/menuService");
 const uploadToCloudinary = require("../../utils/cloudUpload");
+const Offer = require("../../models/Offer")
 
 const create = async (req, res) => {
   try {
