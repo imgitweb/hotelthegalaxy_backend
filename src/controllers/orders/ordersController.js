@@ -187,7 +187,7 @@ exports.getOrderById = async (req, res, next) => {
   try {
     const id = req.params.id;
 
-    const isMongoId = /^[0-9a-fA-F]{24}$/.test(id);
+    // const isMongoId = /^[0-9a-fA-F]{24}$/.test(id);
 
     const order = await Order.findOne(isMongoId ? { _id: id } : { orderId: id })
       .populate("items.menuItem", "name basePrice images")
@@ -222,6 +222,7 @@ exports.getOrderById = async (req, res, next) => {
     next(error);
   }
 };
+
 exports.cancelOrder = async (req, res) => {
   try {
     const { orderId } = req.params;
