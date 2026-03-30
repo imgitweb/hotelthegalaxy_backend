@@ -3,6 +3,8 @@ const jwt = require("jsonwebtoken");
 const { generateOTP, hashOTP } = require("../utils/otp");
 const { sendOTP } = require("../services/smsService");
 
+const { sendAuthTemplate } = require("../utils/whatsaap/sendAuthTemplate");
+
 const MAX_OTP_REQUESTS = Number(process.env.OTP_MAX_REQUESTS_PER_HOUR) || 5;
 
 const OTP_COOLDOWN =
@@ -11,6 +13,7 @@ const OTP_COOLDOWN =
 const OTP_EXPIRY = Number(process.env.OTP_EXPIRY_MINUTES || 5) * 60 * 1000;
 
 const ONE_HOUR = 60 * 60 * 1000;
+
 exports.sendOtp = async (req, res) => {
   try {
     const { fullName, phone, email } = req.body;
@@ -23,9 +26,10 @@ exports.sendOtp = async (req, res) => {
     }
 
     let user = await User.findOne({ phone }).select(
-      "+otpLastRequestedAt +otpRequestCount +otpRequestWindowStartedAt",
+      "+otpLastRequestedAt +otpRequestCount +otpRequestWindowStartedAt"
     );
 
+    // ✅ Create user if not exists
     if (!user) {
       if (!fullName) {
         return res.status(400).json({
@@ -43,6 +47,7 @@ exports.sendOtp = async (req, res) => {
 
     const now = Date.now();
 
+    // ✅ Cooldown check
     if (
       user.otpLastRequestedAt &&
       now - user.otpLastRequestedAt.getTime() < OTP_COOLDOWN
@@ -53,6 +58,7 @@ exports.sendOtp = async (req, res) => {
       });
     }
 
+    // ✅ Reset window after 1 hour
     if (
       !user.otpRequestWindowStartedAt ||
       now - user.otpRequestWindowStartedAt.getTime() > ONE_HOUR
@@ -61,6 +67,7 @@ exports.sendOtp = async (req, res) => {
       user.otpRequestCount = 0;
     }
 
+    // ✅ Max attempts check
     if (user.otpRequestCount >= MAX_OTP_REQUESTS) {
       return res.status(429).json({
         success: false,
@@ -68,6 +75,7 @@ exports.sendOtp = async (req, res) => {
       });
     }
 
+    // ✅ Generate & hash OTP
     const otp = generateOTP();
     const hashedOtp = hashOTP(otp);
 
@@ -78,23 +86,34 @@ exports.sendOtp = async (req, res) => {
 
     await user.save();
 
-    sendOTP(phone, otp).catch((err) =>
+    // ✅ SEND WHATSAPP OTP (REPLACES SMS)
+    const whatsappResponse = await sendAuthTemplate(phone, otp);
 
-      console.error("SMS ERROR:", err.message),
-    );
+    if (!whatsappResponse.success) {
+      console.error("❌ WhatsApp Send Failed:", whatsappResponse.error);
+
+      return res.status(500).json({
+        success: false,
+        message: "Failed to send OTP via WhatsApp",
+      });
+    }
 
     return res.status(200).json({
       success: true,
-      message: "OTP sent successfully",
+      message: "OTP sent successfully on WhatsApp",
     });
+
   } catch (error) {
     console.error("SEND OTP ERROR:", error);
+
     return res.status(500).json({
       success: false,
       message: "Failed to send OTP",
     });
   }
 };
+
+
 exports.verifyOtp = async (req, res) => {
   try {
     const { phone, otp } = req.body;
