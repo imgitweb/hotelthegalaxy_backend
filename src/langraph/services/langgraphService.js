@@ -10,7 +10,7 @@ function normalizePhone(phone) {
   return String(phone).replace(/[^\d]/g, "");
 }
 
-// 🔥 Add 'channel' with a default of "whatsapp"
+
 async function runLangGraph({ phone, text, channel = "whatsapp" }) {
   const normalizedPhone = normalizePhone(phone);
   if (!normalizedPhone) return;

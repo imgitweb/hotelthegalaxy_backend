@@ -1,4 +1,4 @@
-const { extractIncomingMessage } = require("../utils/parseWhatsApp");
+const { extractIncomingMessage } = require("../utils/whatsaap/parseWhatsApp");
 const runLangGraph = require("../langraph/services/langgraphService");
 
 const verifyWebhook = (req, res) => {
