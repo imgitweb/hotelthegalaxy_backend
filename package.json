@@ -9,6 +9,7 @@
   "dependencies": {
     "@langchain/langgraph": "^1.2.2",
     "@langchain/openai": "^1.2.13",
+    "@react-google-maps/api": "^2.20.8",
     "axios": "^1.13.6",
     "bcryptjs": "^3.0.3",
     "cloudinary": "^2.9.0",

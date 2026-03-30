@@ -2,60 +2,99 @@ const razorpay = require("../config/razorpay");
 const crypto = require("crypto");
 const Order = require("../models/User/ordersModel");
 const Payment = require("../models/paymentModel");
-
+const Address = require("../models/User/address");
 
 exports.createOrder = async (req, res, next) => {
   try {
-    const { localOrderId } = req.body;
+    const { items, addressId, noContact, total } = req.body;
+    // console.log("$$ USER DATA", req.body.total);
+    const userId = req.user.id;
+    // console.log("$$$ userID ",userId)
 
-    const orderData = await Order.findById(localOrderId);
-    if (!orderData) {
-      return res.status(404).json({
-        success: false,
-        message: "Order not found",
-      });
-    }
-
-    if (orderData.userId.toString() !== req.user._id.toString()) {
-      return res.status(403).json({
-        success: false,
-        message: "Unauthorized",
-      });
-    }
-
-    const existingPayment = await Payment.findOne({
-      orderId: localOrderId,
-    });
-
-    if (existingPayment) {
+    if (!items || items.length === 0) {
       return res.status(400).json({
         success: false,
-        message: "Payment already initiated",
+        message: "Order must contain at least one item",
       });
     }
 
-    const amount = orderData.totalAmount;
+    if (!addressId) {
+      return res.status(400).json({
+        success: false,
+        message: "Delivery address is required",
+      });
+    }
+    const address = await Address.findById(addressId);
+    console.log(address);
 
-    const options = {
-      amount: amount * 100,
-      currency: "INR",
-      receipt: `receipt_${Date.now()}`,
-    };
+    if (
+      !address ||
+      !address.user ||
+      address.user?.toString() !== userId?.toString()
+    ) {
+      return res.status(403).json({
+        success: false,
+        message: "Invalid delivery address",
+      });
+    }
 
-    const razorpayOrder = await razorpay.orders.create(options);
+    // Calculate totalAmount from items
 
-    await Payment.create({
-      userId: req.user._id,
-      orderId: localOrderId,
+    const updatedItems = items.map((item) => ({
+      ...item,
+      total: item.price * item.quantity,
+    }));
+
+    const totalAmount = req.body?.total;
+
+    const newOrder = new Order({
+      user: userId,
+      items: updatedItems,
+      address: address,
+      noContact: noContact || false,
+      paymentStatus: "pending",
+      orderStatus: "confirmed",
+      totalAmount,
+    });
+    let savedOrder;
+    try {
+      savedOrder = await newOrder.save();
+      console.log("$$$ order saved");
+    } catch (error) {
+      console.log("$$$ Error", error);
+      return;
+    }
+    let razorpayOrder;
+    // Create Razorpay order
+    try {
+      console.log("Amount", totalAmount);
+      razorpayOrder = await razorpay.orders.create({
+        amount: totalAmount * 100,
+        currency: "INR",
+        receipt: `receipt_${savedOrder._id}_${new Date().getDate()}`,
+      });
+    } catch (error) {
+      console.dir("$$$ Razorpay error", error);
+      return;
+    }
+
+    // Save payment info
+    const payment = await Payment.create({
+      userId,
+      orderId: savedOrder._id,
       razorpayOrderId: razorpayOrder.id,
-      amount,
-      receipt: options.receipt,
+      amount: totalAmount,
+      receipt: razorpayOrder.receipt,
       status: "created",
     });
 
-    res.status(200).json({
+    console.log("$$$ payment saved", payment);
+
+    res.status(201).json({
       success: true,
-      order: razorpayOrder,
+      message: "Order created successfully. Proceed with payment.",
+      data: savedOrder,
+      razorpayOrder,
     });
   } catch (err) {
     next(err);
@@ -64,11 +103,8 @@ exports.createOrder = async (req, res, next) => {
 
 exports.verifyPayment = async (req, res, next) => {
   try {
-    const {
-      razorpay_order_id,
-      razorpay_payment_id,
-      razorpay_signature,
-    } = req.body;
+    const { razorpay_order_id, razorpay_payment_id, razorpay_signature } =
+      req.body;
 
     const body = razorpay_order_id + "|" + razorpay_payment_id;
 
@@ -83,7 +119,7 @@ exports.verifyPayment = async (req, res, next) => {
         {
           status: "failed",
           failureReason: "Invalid Signature",
-        }
+        },
       );
 
       return res.status(400).json({
@@ -110,22 +146,37 @@ exports.verifyPayment = async (req, res, next) => {
       });
     }
 
-    const captured = await razorpay.payments.capture(
-      razorpay_payment_id,
-      payment.amount * 100
-    );
+    let captured;
 
-    await Payment.findOneAndUpdate(
-      { razorpayOrderId: razorpay_order_id },
-      {
-        razorpayPaymentId: razorpay_payment_id,
-        razorpaySignature: razorpay_signature,
-        paymentMethod: captured.method || "unknown",
-        razorpayStatus: captured.status,
-        status: "captured",
-        isCaptured: true,
+    try {
+      captured = await razorpay.payments.capture(
+        razorpay_payment_id,
+        payment.amount * 100,
+      );
+    } catch (err) {
+      if (
+        err.error &&
+        err.error.description === "This payment has already been captured"
+      ) {
+        captured = { status: "captured" };
+      } else {
+        throw err;
       }
-    );
+    }
+
+    if (captured) {
+      await Payment.findOneAndUpdate(
+        { razorpayOrderId: razorpay_order_id },
+        {
+          razorpayPaymentId: razorpay_payment_id,
+          razorpaySignature: razorpay_signature,
+          paymentMethod: captured.method || "unknown",
+          razorpayStatus: captured.status,
+          status: "captured",
+          isCaptured: true,
+        },
+      );
+    }
 
     await Order.findByIdAndUpdate(payment.orderId, {
       paymentStatus: "paid",
@@ -167,7 +218,7 @@ exports.handleCancel = async (req, res, next) => {
       {
         status: "failed",
         failureReason: reason || "User cancelled payment",
-      }
+      },
     );
 
     await Order.findByIdAndUpdate(payment.orderId, {
