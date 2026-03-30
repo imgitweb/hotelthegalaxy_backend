@@ -32,6 +32,8 @@ const combsRoute = require("./routes/public/combo.routes");
 const whatsappRoutes = require("./routes/whatsappRoutes");
 const chatRoutes = require("./routes/chatRoutes");
 
+const settingRoutes = require("./routes/settingRoutes")
+
 const offerRoutepublic = require("./routes/public/offers.routes");
 const dashboardRoutes = require("./routes/admin/dashboardRoutes");
 const riderRoutes = require("./routes/admin/rider.routes");
@@ -40,6 +42,7 @@ const roomRoutes = require("./routes/roomRoutes");
 const path = require("path");
 const router = require("express").Router();
 const app = express();
+
 app.use(mongoSanitize());
 app.use(xss());
 app.use(compression());
@@ -108,6 +111,8 @@ app.use("/api/v1/enquiries", enquiryRoutes);
 app.use("/api/v1/reviews", reviewRoutes);
 app.use("/api/v1/dining", combsRoute);
 // app.use("/api/v1/admin/dining", offerRoute);
+
+app.use("/api/v1/settings", settingRoutes);
 
 app.use("/webhook", whatsappRoutes);
 app.use("/api", chatRoutes);
