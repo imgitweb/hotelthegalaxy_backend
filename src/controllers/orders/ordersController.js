@@ -5,7 +5,6 @@ const Combo = require("../../models/dining/combomodel");
 const Review = require("../../models/reviewModel");
 const Address = require("../../models/User/address");
 const getDistanceKm = require("../../utils/distanceService");
-const calculateDeliveryCharge = require("../../utils/deliveryCharge");
 const calculateETA = require("../../utils/calculateETA");
 
 
@@ -27,7 +26,6 @@ exports.createOrder = async (req, res, next) => {
       });
     }
 
-    // Optional: fetch address only if addressId provided
     let selectedAddress = null;
    if (addressId) {
   selectedAddress = await Address.findById(addressId);
