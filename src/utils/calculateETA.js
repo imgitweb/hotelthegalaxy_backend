@@ -72,7 +72,7 @@ const calculateFare = (distanceKm, settings, subtotal = 0) => {
   return Math.ceil(fare);
 };
 
-const Data_for_checkout_page = async (req, res, next) => {
+module.exports.Data_for_checkout_page = async (req, res, next) => {
   try {
     const { addressId } = req.body;
     console.log("Address ID", addressId);
@@ -102,7 +102,7 @@ const Data_for_checkout_page = async (req, res, next) => {
   }
 };
 
-const calculateETA = async (order) => {
+module.exports.calculateETA = async (order) => {
   try {
     const {
       address,
@@ -182,5 +182,4 @@ const calculateETA = async (order) => {
   }
 };
 
-module.exports = calculateETA;
-module.exports = Data_for_checkout_page;
+// module.exports = calculateETA;

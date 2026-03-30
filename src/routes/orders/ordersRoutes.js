@@ -28,8 +28,6 @@
 
 // module.exports = router;
 
-
-
 const express = require("express");
 const router = express.Router();
 
@@ -37,27 +35,21 @@ const protect = require("../../middleware/auth");
 const checkAvailability = require("../../middleware/checkAvailability");
 
 const orderController = require("../../controllers/orders/ordersController");
-const Data_for_checkout_page = require("../../utils/calculateETA");
+const { Data_for_checkout_page } = require("../../utils/calculateETA");
 
 console.log("Loading Orders Routes...");
 console.log("Controller loaded:", orderController);
 console.log("Protect middleware:", protect);
 
-router.post(
-  "/",
-  protect,
-  checkAvailability, 
-  (req, res, next) => {
-    console.log("POST /orders called");
-    orderController.createOrder(req, res, next);
-  }
-);
+router.post("/", protect, checkAvailability, (req, res, next) => {
+  console.log("POST /orders called");
+  orderController.createOrder(req, res, next);
+});
 
 router.get("/", protect, (req, res, next) => {
   console.log("GET /orders called");
   orderController.getMyOrders(req, res, next);
 });
-
 
 router.get("/:id", protect, (req, res, next) => {
   console.log("GET /orders/:id called");
@@ -69,12 +61,11 @@ router.patch("/:id/status", protect, (req, res, next) => {
   orderController.updateOrderStatus(req, res, next);
 });
 
-
 router.patch("/:orderId/cancel", protect, (req, res, next) => {
   console.log("PATCH /orders/:orderId/cancel called");
   orderController.cancelOrder(req, res, next);
 });
 
-router.post("/get_fare", Data_for_checkout_page)
+router.post("/get_fare", Data_for_checkout_page);
 
 module.exports = router;

@@ -5,7 +5,7 @@ const Combo = require("../../models/dining/combomodel");
 const Review = require("../../models/reviewModel");
 const Address = require("../../models/User/address");
 const getDistanceKm = require("../../utils/distanceService");
-const calculateETA = require("../../utils/calculateETA");
+const { calculateETA } = require("../../utils/calculateETA");
 
 const HOTEL_LOCATION = {
   lat: 22.061401,
@@ -125,9 +125,7 @@ exports.createOrder = async (req, res, next) => {
       },
       distanceKm,
       eta: selectedAddress
-        ? (
-            await calculateETA({ address: userLocation, status: "pending" })
-          ).eta
+        ? (await calculateETA({ address: userLocation, status: "pending" })).eta
         : null,
       address: selectedAddress
         ? {
@@ -220,6 +218,7 @@ exports.getOrderById = async (req, res, next) => {
       data: order,
     });
   } catch (error) {
+    console.log("Get Order By ID Error:", error);
     next(error);
   }
 };
