@@ -20,7 +20,7 @@ exports.chatMessage = async (req, res) => {
       phone: staticPhone,         
       text: message,
       fullName: staticFullName, 
-      channel: "web"            // Web channel flag
+      channel: "web"            
     });
 
     console.log("✅ LangGraph output:", output);

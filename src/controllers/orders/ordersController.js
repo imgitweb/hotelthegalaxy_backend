@@ -18,6 +18,8 @@ exports.createOrder = async (req, res, next) => {
   try {
     const { items, addressId } = req.body;
 
+    const userId = req.user._id;
+
     if (!items || !Array.isArray(items) || items.length === 0) {
       return res.status(400).json({
         success: false,
@@ -25,15 +27,18 @@ exports.createOrder = async (req, res, next) => {
       });
     }
 
-    const selectedAddress = await Address.findById(addressId);
+    // Optional: fetch address only if addressId provided
+    let selectedAddress = null;
+   if (addressId) {
+  selectedAddress = await Address.findById(addressId);
 
-    if (!selectedAddress) {
-      return res.status(404).json({
-        success: false,
-        message: "Address not found",
-      });
-    }
-
+  if (!selectedAddress) { 
+    return res.status(404).json({
+      success: false,
+      message: "Address not found",
+    });
+  }
+}
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
@@ -57,37 +62,13 @@ exports.createOrder = async (req, res, next) => {
 
       if (item.menuItem) {
         const menuItem = await MenuItem.findById(item.menuItem);
-
         if (!menuItem) {
-          return res.status(404).json({
-            success: false,
-            message: "Menu item not found",
-          });
+          return res.status(404).json({ success: false, message: "Menu item not found" });
         }
 
         const price = menuItem.basePrice;
         const total = price * item.quantity;
-
         subtotal += total;
-
-        const updatedRoster = await DailyRoster.findOneAndUpdate(
-          {
-            date: today,
-            "items.id": item.menuItem,
-            "items.quantity": { $gte: item.quantity },
-          },
-          {
-            $inc: { "items.$.quantity": -item.quantity },
-          },
-          { new: true }
-        );
-
-        if (!updatedRoster) {
-          return res.status(400).json({
-            success: false,
-            message: `${menuItem.name} is out of stock`,
-          });
-        }
 
         orderItems.push({
           menuItem: menuItem._id,
@@ -100,17 +81,12 @@ exports.createOrder = async (req, res, next) => {
 
       if (item.combo) {
         const combo = await Combo.findById(item.combo);
-
         if (!combo) {
-          return res.status(404).json({
-            success: false,
-            message: "Combo not found",
-          });
+          return res.status(404).json({ success: false, message: "Combo not found" });
         }
 
         const price = combo.price;
         const total = price * item.quantity;
-
         subtotal += total;
 
         orderItems.push({
@@ -123,29 +99,13 @@ exports.createOrder = async (req, res, next) => {
       }
     }
 
-    if (orderItems.length === 0) {
-      return res.status(400).json({
-        success: false,
-        message: "No valid items found",
-      });
-    }
+    // Default values if no address provided
+    const userLocation = selectedAddress
+      ? { lat: selectedAddress.lat, lng: selectedAddress.lng }
+      : { lat: 0, lng: 0 };
 
-    const userLocation = {
-      lat: selectedAddress.lat,
-      lng: selectedAddress.lng,
-    };
-
-    const distanceKm = await getDistanceKm(
-      HOTEL_LOCATION,
-      userLocation
-    );
-
+    const distanceKm = selectedAddress ? await getDistanceKm(HOTEL_LOCATION, userLocation) : 0;
     const deliveryCharge = calculateDeliveryCharge(distanceKm, subtotal);
-
-    const etaData = await calculateETA({
-      address: userLocation,
-      status: "pending",
-    });
 
     const tax = Math.round(subtotal * 0.05);
     const total = subtotal + tax + deliveryCharge;
@@ -154,25 +114,23 @@ exports.createOrder = async (req, res, next) => {
       orderNumber: "ORD-" + Date.now(),
       user: req.user.id,
       items: orderItems,
-
       pricing: {
         subtotal,
         tax,
         deliveryCharge,
         total,
       },
-
       distanceKm,
-      eta: etaData.eta,
-
-      address: {
-        street: selectedAddress.street,
-        landmark: selectedAddress.landmark,
-        lat: selectedAddress.lat,
-        lng: selectedAddress.lng,
-        location: selectedAddress.location,
-      },
-
+      eta: selectedAddress ? (await calculateETA({ address: userLocation, status: "pending" })).eta : null,
+      address: selectedAddress
+        ? {
+            street: selectedAddress.street,
+            landmark: selectedAddress.landmark,
+            lat: selectedAddress.lat,
+            lng: selectedAddress.lng,
+            location: selectedAddress.location,
+          }
+        : {},
       status: "pending",
     });
 

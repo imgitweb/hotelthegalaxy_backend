@@ -17,7 +17,7 @@ const IntentSchema = z.object({
     "GREETING", 
     "SHOW_MENU", "ADD_TO_CART", "REMOVE_FROM_CART", "CHECKOUT", "PROVIDE_ADDRESS", 
     "TRACK_ORDER", "ORDER_STATS", "CANCEL_ORDER", 
-    "HELP", "UNKNOWN", "SELECT_SAVED_ADDRESS" // <-- Added intent for address selection
+    "HELP", "UNKNOWN", "SELECT_SAVED_ADDRESS"
   ]).describe("Identify the core intent of the user's message."),
   
   extracted_items: z.array(z.object({
@@ -50,12 +50,12 @@ async function agentDecisionNode(state) {
   
   if (msg.startsWith("cat_")) return { ...state, aiIntent: "SHOW_CATEGORY_ITEMS", aiData: { categoryId: msg.split("_")[1] } };
   
-  // 🔥 CRITICAL FIX: Direct Address Button Selection
+  // 🔥 Direct Address Button Selection
   if (msg.startsWith("addr_")) {
     return { ...state, aiIntent: "CHOOSE_PAYMENT", aiData: { addressId: msg.split("_")[1] } };
   }
   
-  // Payment Flow
+  // 🔥 Payment Flow Routing
   if (msg === "pay_online") return { ...state, aiIntent: "INITIATE_UPI_PAYMENT" };
   if (msg === "btn_paid") return { ...state, aiIntent: "COMPLETE_ORDER", aiData: { method: "ONLINE" } };
   if (msg === "pay_cod") return { ...state, aiIntent: "COMPLETE_ORDER", aiData: { method: "COD" } };
@@ -217,10 +217,9 @@ async function actionExecutionNode(state) {
       }
       break;
 
-    // 🔥 NEW: Handle chat-based address selection ("1" or "2")
     case "SELECT_SAVED_ADDRESS":
       const savedAddresses = await getUserAddresses(user._id);
-      const index = (aiData.address_index || 1) - 1; // Convert 1-based to 0-based array index
+      const index = (aiData.address_index || 1) - 1; 
       
       if (savedAddresses && savedAddresses[index]) {
          session.addressId = savedAddresses[index]._id;
@@ -241,7 +240,7 @@ async function actionExecutionNode(state) {
       buttons = [{ id: "pay_cod", title: "💵 Cash on Delivery" }, { id: "pay_online", title: "💳 Pay Online (UPI)" }];
       break;
 
-    // 🔥 Handles Button-based address selection
+    // 🔥 FIXED: Added missing CHOOSE_PAYMENT case
     case "CHOOSE_PAYMENT":
       if (aiData.addressId) {
         session.addressId = aiData.addressId;
@@ -251,18 +250,55 @@ async function actionExecutionNode(state) {
       buttons = [{ id: "pay_cod", title: "💵 Cash on Delivery" }, { id: "pay_online", title: "💳 Pay Online (UPI)" }];
       break;
 
+    // 🔥 FIXED: Added missing INITIATE_UPI_PAYMENT case
     case "INITIATE_UPI_PAYMENT":
-      const cartSub = session.cart.reduce((sum, item) => sum + item.total, 0);
-      const finalAmount = cartSub + (cartSub * 0.05);
+      const cartItems = session.cart || [];
+      if (cartItems.length === 0) {
+        replyText = "🛒 Your cart is empty! Please add some items first.";
+        buttons = [{ id: "btn_order", title: "🍔 Order Food" }];
+        break;
+      }
+      const cartSub = cartItems.reduce((sum, item) => sum + item.total, 0);
+      const finalAmount = cartSub + (cartSub * 0.05); // Calculating with 5% tax
       const upiLink = `upi://pay?pa=merchant@upi&pn=RoyalHotel&am=${finalAmount.toFixed(2)}&cu=INR`;
-      replyText = `💳 *Online Payment*\nGrand Total (incl. Taxes): *₹${finalAmount.toFixed(2)}*\n\n👉 Click the link to pay:\n🔗 ${upiLink}\n\nOnce paid, click confirm.`;
+      
+      replyText = `💳 *Online Payment*\nGrand Total (incl. Taxes): *₹${finalAmount.toFixed(2)}*\n\n👉 Click the link to pay:\n🔗 ${upiLink}\n\nOnce paid, click confirm below.`;
       buttons = [{ id: "btn_paid", title: "✅ I have Paid" }];
       break;
 
     case "COMPLETE_ORDER":
-      const order = await placeOrder(phone, aiData.method);
-      replyText = `🎉 *Order Confirmed!*\n\nOrder ID: *${order?.orderNumber || "Processing"}*\nPayment: *${aiData.method}*\n\nOur chefs are preparing your delicious food! 👨‍🍳🔥`;
-      buttons = [{ id: "btn_track", title: "📦 Track Order" }, { id: "btn_order", title: "🍔 Order Again" }];
+      try {
+        const methodUsed = aiData.method || "COD";
+        
+        console.log("--- ATTEMPTING TO PLACE ORDER ---");
+        console.log("Phone:", phone);
+        console.log("Payment Method:", methodUsed);
+        console.log("Session Address ID:", session.addressId);
+        
+        if (!session.cart || session.cart.length === 0) {
+           throw new Error("Cart is empty! Cannot place order.");
+        }
+        if (!session.addressId) {
+           throw new Error("Address ID is missing! Cannot place order.");
+        }
+
+        const order = await placeOrder(phone, methodUsed); 
+        
+        if (!order) {
+          throw new Error("placeOrder function returned null or undefined.");
+        }
+
+        const formattedMethod = methodUsed === "ONLINE" ? "Paid Online ✅" : "Cash on Delivery 💵";
+        replyText = `🎉 *Order Confirmed!*\n\n🔖 Order ID: *${order.orderNumber || "Processing"}*\n💳 Payment: *${formattedMethod}*\n\nOur chefs are preparing your delicious food! 👨‍🍳🔥`;
+        buttons = [{ id: "btn_track", title: "📦 Track Order" }, { id: "btn_order", title: "🍔 Order Again" }];
+        
+      } catch (error) {
+        console.error("❌ CRITICAL DB ERROR:", error.message);
+        console.error("Full Error Stack:", error);
+        
+        replyText = `❌ Error placing order: ${error.message}. Please try checking out again.`;
+        buttons = [{ id: "btn_checkout", title: "➡️ Retry Checkout" }];
+      }
       break;
 
     default:

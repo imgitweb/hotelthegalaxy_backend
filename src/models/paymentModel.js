@@ -70,6 +70,7 @@ const paymentSchema = new mongoose.Schema(
     receipt: {
       type: String,
       default: null,
+      trim : true
     },
 
     failureReason: {

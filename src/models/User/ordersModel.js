@@ -32,8 +32,9 @@ const orderItemSchema = new mongoose.Schema(
 
     total: {
       type: Number,
-      required: true,
+      // required: true,
       min: 0,
+      default  : 0
     },
   },
   { _id: false },
@@ -52,13 +53,13 @@ const orderAddressSchema = new mongoose.Schema(
     lat: {
       type: Number,
       required: true,
-      index: true,
+      // index: true,
     },
 
     lng: {
       type: Number,
       required: true,
-      index: true,
+      // index: true,
     },
 
     location: {
@@ -69,8 +70,8 @@ const orderAddressSchema = new mongoose.Schema(
       },
       coordinates: {
         type: [Number],
-        required: true,
-        index: "2dsphere",
+        // required: true,
+        // index: "2dsphere",
       },
     },
   },
@@ -91,7 +92,7 @@ const restaurantLocationSchema = new mongoose.Schema(
       coordinates: {
         type: [Number],
         required: true,
-        index: "2dsphere",
+        // index: "2dsphere",
       },
     },
   },
@@ -116,7 +117,7 @@ const partnerLocationSchema = new mongoose.Schema(
       },
       coordinates: {
         type: [Number],
-        index: "2dsphere",
+        // index: "2dsphere",
       },
     },
   },
@@ -127,15 +128,15 @@ const orderSchema = new mongoose.Schema(
   {
     orderNumber: {
       type: String,
-      unique: true,
-      index: true,
+      // unique: true,
+      // index: true,
     },
 
     user: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
       required: true,
-      index: true,
+      // index: true,
     },
 
     items: {
@@ -172,7 +173,7 @@ const orderSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "Rider",
       default: null,
-      index: true,
+      // index: true,
     },
 
     status: {
@@ -187,7 +188,7 @@ const orderSchema = new mongoose.Schema(
         "cancelled",
       ],
       default: "pending",
-      index: true,
+      // index: true,
     },
 
     prepTimeRemaining: {
