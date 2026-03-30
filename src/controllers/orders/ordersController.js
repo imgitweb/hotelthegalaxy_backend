@@ -4,10 +4,21 @@ const DailyRoster = require("../../models/dining/DailyRoster");
 const Combo = require("../../models/dining/combomodel");
 const Review = require("../../models/reviewModel");
 const Address = require("../../models/User/address");
+const getDistanceKm = require("../../utils/distanceService");
+const calculateDeliveryCharge = require("../../utils/deliveryCharge");
+const calculateETA = require("../../utils/calculateETA");
+
+
+const HOTEL_LOCATION = {
+  lat: 22.061401,
+  lng: 78.94776,
+};
 
 exports.createOrder = async (req, res, next) => {
   try {
     const { items, addressId } = req.body;
+
+    const userId = req.user._id;
 
     if (!items || !Array.isArray(items) || items.length === 0) {
       return res.status(400).json({
@@ -15,24 +26,26 @@ exports.createOrder = async (req, res, next) => {
         message: "No items provided",
       });
     }
-    const selectedAddress = await Address.findById(addressId);
 
-    if (!selectedAddress) {
-      return res.status(404).json({
-        success: false,
-        message: "Address not found",
-      });
-    }
+    // Optional: fetch address only if addressId provided
+    let selectedAddress = null;
+   if (addressId) {
+  selectedAddress = await Address.findById(addressId);
 
+  if (!selectedAddress) { 
+    return res.status(404).json({
+      success: false,
+      message: "Address not found",
+    });
+  }
+}
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
     let subtotal = 0;
     const orderItems = [];
 
-    // ✅ PROCESS ITEMS
     for (const item of items) {
-      // 🔒 STRICT VALIDATION
       if (!item.quantity || item.quantity < 1) {
         return res.status(400).json({
           success: false,
@@ -40,7 +53,6 @@ exports.createOrder = async (req, res, next) => {
         });
       }
 
-      // ❌ BOTH OR NONE CHECK
       if (!!item.menuItem === !!item.combo) {
         return res.status(400).json({
           success: false,
@@ -48,43 +60,15 @@ exports.createOrder = async (req, res, next) => {
         });
       }
 
-      // ============================
-      // ✅ MENU ITEM HANDLING
-      // ============================
       if (item.menuItem) {
         const menuItem = await MenuItem.findById(item.menuItem);
-
         if (!menuItem) {
-          return res.status(404).json({
-            success: false,
-            message: "Menu item not found",
-          });
+          return res.status(404).json({ success: false, message: "Menu item not found" });
         }
 
         const price = menuItem.basePrice;
         const total = price * item.quantity;
-
         subtotal += total;
-
-        // 🔥 STOCK MANAGEMENT
-        const updatedRoster = await DailyRoster.findOneAndUpdate(
-          {
-            date: today,
-            "items.id": item.menuItem,
-            "items.quantity": { $gte: item.quantity },
-          },
-          {
-            $inc: { "items.$.quantity": -item.quantity },
-          },
-          { new: true }
-        );
-
-        if (!updatedRoster) {
-          return res.status(400).json({
-            success: false,
-            message: `${menuItem.name} is out of stock`,
-          });
-        }
 
         orderItems.push({
           menuItem: menuItem._id,
@@ -95,22 +79,14 @@ exports.createOrder = async (req, res, next) => {
         });
       }
 
-      // ============================
-      // ✅ COMBO HANDLING (🔥 FIXED)
-      // ============================
       if (item.combo) {
         const combo = await Combo.findById(item.combo);
-
         if (!combo) {
-          return res.status(404).json({
-            success: false,
-            message: "Combo not found",
-          });
+          return res.status(404).json({ success: false, message: "Combo not found" });
         }
 
-        const price = combo.price; // ensure combo has price
+        const price = combo.price;
         const total = price * item.quantity;
-
         subtotal += total;
 
         orderItems.push({
@@ -123,19 +99,17 @@ exports.createOrder = async (req, res, next) => {
       }
     }
 
-    // 🚨 FINAL SAFETY CHECK
-    if (orderItems.length === 0) {
-      return res.status(400).json({
-        success: false,
-        message: "No valid items found",
-      });
-    }
+    // Default values if no address provided
+    const userLocation = selectedAddress
+      ? { lat: selectedAddress.lat, lng: selectedAddress.lng }
+      : { lat: 0, lng: 0 };
 
-    // ✅ PRICING
+    const distanceKm = selectedAddress ? await getDistanceKm(HOTEL_LOCATION, userLocation) : 0;
+    const deliveryCharge = calculateDeliveryCharge(distanceKm, subtotal);
+
     const tax = Math.round(subtotal * 0.05);
-    const total = subtotal + tax;
+    const total = subtotal + tax + deliveryCharge;
 
-    // ✅ CREATE ORDER
     const order = await Order.create({
       orderNumber: "ORD-" + Date.now(),
       user: req.user.id,
@@ -143,30 +117,33 @@ exports.createOrder = async (req, res, next) => {
       pricing: {
         subtotal,
         tax,
+        deliveryCharge,
         total,
       },
-      address: {
-        street: selectedAddress.street,
-        landmark: selectedAddress.landmark,
-        lat: selectedAddress.lat,
-        lng: selectedAddress.lng,
-        location: selectedAddress.location,
-      },
+      distanceKm,
+      eta: selectedAddress ? (await calculateETA({ address: userLocation, status: "pending" })).eta : null,
+      address: selectedAddress
+        ? {
+            street: selectedAddress.street,
+            landmark: selectedAddress.landmark,
+            lat: selectedAddress.lat,
+            lng: selectedAddress.lng,
+            location: selectedAddress.location,
+          }
+        : {},
       status: "pending",
     });
-
-    console.log("📦 Order Saved Address:", order.address);
 
     res.status(201).json({
       success: true,
       data: order,
     });
   } catch (error) {
+    console.error("Create Order Error:", error.message);
     next(error);
   }
 };
 
-// ✅ GET MY ORDERS
 exports.getMyOrders = async (req, res, next) => {
   try {
     const orders = await Order.find({ user: req.user.id })
@@ -201,7 +178,6 @@ exports.getMyOrders = async (req, res, next) => {
   }
 };
 
-// ✅ GET ORDER BY ID
 exports.getOrderById = async (req, res, next) => {
   try {
     const order = await Order.findById(req.params.id)
@@ -222,6 +198,12 @@ exports.getOrderById = async (req, res, next) => {
       });
     }
 
+    const etaData = await calculateETA(order);
+    order.eta = etaData.eta;
+    order.distanceKm = etaData.distanceKm;
+
+    await order.save();
+
     res.status(200).json({
       success: true,
       data: order,
@@ -231,7 +213,6 @@ exports.getOrderById = async (req, res, next) => {
   }
 };
 
-// ✅ CANCEL ORDER
 exports.cancelOrder = async (req, res) => {
   try {
     const { orderId } = req.params;
@@ -285,7 +266,6 @@ exports.cancelOrder = async (req, res) => {
   }
 };
 
-// ✅ UPDATE ORDER STATUS
 exports.updateOrderStatus = async (req, res, next) => {
   try {
     const { id } = req.params;

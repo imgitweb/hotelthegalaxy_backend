@@ -20,10 +20,10 @@ const notFound = (req, res, next) => {
 const handleCastErrorDB = (err) =>
   new AppError(`Invalid ${err.path}: ${err.value}`, 400);
 
-const handleDuplicateFieldsDB = (err) => {
-  const field = Object.keys(err.keyValue)[0];
-  return new AppError(`Duplicate value for field: ${field}`, 409);
-};
+// const handleDuplicateFieldsDB = (err) => {
+//   const field = Object.keys(err.keyValue)[0];
+//   return new AppError(`Duplicate value for field: ${field}`, 409);
+// };
 
 const handleValidationErrorDB = (err) => {
   const errors = Object.values(err.errors).map((el) => el.message);
@@ -70,9 +70,9 @@ const errorHandler = (err, req, res, next) => {
     error = handleCastErrorDB(err);
   }
 
-  if (err.code === 11000) {
-    error = handleDuplicateFieldsDB(err);
-  }
+  // if (err.code === 11000) {
+  //   error = handleDuplicateFieldsDB(err);
+  // }
 
   if (err instanceof mongoose.Error.ValidationError) {
     error = handleValidationErrorDB(err);

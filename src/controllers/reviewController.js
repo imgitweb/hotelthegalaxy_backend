@@ -21,46 +21,48 @@ exports.createReview = async (req, res, next) => {
       });
     }
 
-    const orderItemIds = orderData.items.map((i) => i.menuItem.toString());
-
-    const reviewDocs = [];
+    const orderItemIds = orderData.items.map(
+      (i) => i?.menuItem?.toString() || i?.combo?.toString(),
+    );
 
     for (const r of reviews) {
+      if (!r.menuItem || !r.rating) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid review data",
+        });
+      }
+
       if (!orderItemIds.includes(r.menuItem)) {
         return res.status(400).json({
           success: false,
           message: "Invalid item review detected",
         });
       }
-
-      const exists = await Review.findOne({
-        user: req.user.id,
-        order,
-        menuItem: r.menuItem,
-      });
-
-      if (exists) {
-        return res.status(400).json({
-          success: false,
-          message: "Review already submitted for this item",
-        });
-      }
-
-      reviewDocs.push({
-        user: req.user.id,
-        order,
-        menuItem: r.menuItem,
-        rating: r.rating,
-        comment: r.comment || "",
-      });
     }
 
-    const createdReviews = await Review.insertMany(reviewDocs);
+    const operations = reviews.map((r) => ({
+      updateOne: {
+        filter: {
+          user: req.user.id,
+          order,
+          menuItem: r.menuItem,
+        },
+        update: {
+          $set: {
+            rating: r.rating,
+            comment: r.comment || "",
+          },
+        },
+        upsert: true,
+      },
+    }));
 
-    res.status(201).json({
+    await Review.bulkWrite(operations,{ordered : false});
+
+    return res.status(200).json({
       success: true,
-      data: createdReviews,
-      message: "Reviews submitted successfully",
+      message: "Reviews saved successfully",
     });
   } catch (error) {
     next(error);

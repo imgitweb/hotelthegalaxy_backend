@@ -72,7 +72,7 @@ const createOffer = async (req, res) => {
     let imageData = {};
 
     if (req.file) {
-      const uploaded = await uploadToCloudinarys(req.file.buffer, "offers");
+      const uploaded = await uploadToCloudinary(req.file.buffer, "offers");
 
       imageData = {
         url: uploaded.secure_url,
