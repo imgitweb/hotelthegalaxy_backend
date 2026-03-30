@@ -1,4 +1,5 @@
 const axios = require("axios");
+const Setting = require("../models/Setting");
 
 const API_KEY = process.env.GOOGLE_MAPS_API;
 
@@ -31,7 +32,7 @@ const getDistanceTime = async (origin, destination) => {
         traffic_model: "best_guess",
         key: API_KEY,
       },
-    },
+    }
   );
 
   const element = res?.data?.rows?.[0]?.elements?.[0];
@@ -47,31 +48,54 @@ const getDistanceTime = async (origin, destination) => {
   const distanceKm = (element?.distance?.value || 0) / 1000;
 
   console.log(
-    `✅ Travel: ${Math.ceil(
-      travelSeconds / 60,
-    )} mins | Distance: ${distanceKm.toFixed(1)} km`,
+    `✅ Travel: ${Math.ceil(travelSeconds / 60)} mins | Distance: ${distanceKm.toFixed(1)} km`
   );
 
   return { travelSeconds, distanceKm };
 };
 
+const calculateFare = (distanceKm, settings, subtotal = 0) => {
+  if (subtotal >= settings.freeDeliveryAbove) return 0;
+
+  let fare = settings.baseFee + distanceKm * settings.perKmRate;
+
+  if (fare < settings.minCharge) {
+    fare = settings.minCharge;
+  }
+
+  if (fare > settings.maxCharge) {
+    fare = settings.maxCharge;
+  }
+
+  return Math.ceil(fare);
+};
+
 const calculateETA = async (order) => {
   try {
-    const { address, status, prepTimeRemaining = 10, prepTime = 20 } = order;
+    const {
+      address,
+      status,
+      prepTimeRemaining = 10,
+      prepTime = 20,
+      pricing = {},
+    } = order;
 
     if (address?.lat == null || address?.lng == null) {
       throw new Error("User coordinates (address.lat / address.lng) missing");
     }
 
-    const userLocation = { lat: Number(address.lat), lng: Number(address.lng) };
+    const userLocation = {
+      lat: Number(address.lat),
+      lng: Number(address.lng),
+    };
 
     if (status === "delivered") {
-      return { eta: 0, travelMins: 0, distanceKm: 0 };
+      return { eta: 0, travelMins: 0, distanceKm: 0, fare: 0 };
     }
 
     const { travelSeconds, distanceKm } = await getDistanceTime(
       HOTEL_LOCATION,
-      userLocation,
+      userLocation
     );
 
     const travelMins = Math.ceil(travelSeconds / 60);
@@ -98,13 +122,26 @@ const calculateETA = async (order) => {
 
     const finalEta = Math.max(5, Math.ceil(etaMins));
 
+    let settings = await Setting.findOne();
+
+    if (!settings) {
+      settings = await Setting.create({});
+    }
+
+    const subtotal = pricing?.subtotal || 0;
+
+    const fare = calculateFare(distanceKm, settings, subtotal);
+
     console.log(
-      `🕐 ETA for status "${status}": ${finalEta} mins | Travel: ${travelMins} mins | Prep left: ${prepTimeRemaining} mins | Distance: ${distanceKm.toFixed(
-        1,
-      )} km`,
+      `🕐 ETA: ${finalEta} mins | 🚚 Fare: ₹${fare} | 📏 Distance: ${distanceKm.toFixed(1)} km`
     );
 
-    return { eta: finalEta, travelMins, distanceKm };
+    return {
+      eta: finalEta,
+      travelMins,
+      distanceKm,
+      fare,
+    };
   } catch (err) {
     console.error("💥 FULL ERROR:", err.response?.data || err.message);
     throw err;
