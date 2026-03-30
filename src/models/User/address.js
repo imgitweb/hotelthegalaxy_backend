@@ -5,7 +5,7 @@ const addressSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
       required: true,
-      index: true,
+      
     },
 
     street: {
@@ -33,13 +33,13 @@ const addressSchema = new mongoose.Schema(
     lat: {
       type: Number,
       required: true,
-      index: true,
+      
     },
 
     lng: {
       type: Number,
       required: true,
-      index: true,
+      
     },
 
     location: {
@@ -58,14 +58,12 @@ const addressSchema = new mongoose.Schema(
     isDefault: {
       type: Boolean,
       default: false,
-      index: true,
+      
     },
   },
   {
     timestamps: true,
   },
 );
-
-addressSchema.index({ user: 1, createdAt: -1 });
 
 module.exports = mongoose.model("Address", addressSchema);
