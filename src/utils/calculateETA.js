@@ -1,6 +1,6 @@
 const axios = require("axios");
 const Setting = require("../models/Setting");
-
+const addressSchema = require("../models/User/address");
 const API_KEY = process.env.GOOGLE_MAPS_API;
 
 const HOTEL_LOCATION = {
@@ -32,7 +32,7 @@ const getDistanceTime = async (origin, destination) => {
         traffic_model: "best_guess",
         key: API_KEY,
       },
-    }
+    },
   );
 
   const element = res?.data?.rows?.[0]?.elements?.[0];
@@ -48,7 +48,9 @@ const getDistanceTime = async (origin, destination) => {
   const distanceKm = (element?.distance?.value || 0) / 1000;
 
   console.log(
-    `✅ Travel: ${Math.ceil(travelSeconds / 60)} mins | Distance: ${distanceKm.toFixed(1)} km`
+    `✅ Travel: ${Math.ceil(
+      travelSeconds / 60,
+    )} mins | Distance: ${distanceKm.toFixed(1)} km`,
   );
 
   return { travelSeconds, distanceKm };
@@ -68,6 +70,36 @@ const calculateFare = (distanceKm, settings, subtotal = 0) => {
   }
 
   return Math.ceil(fare);
+};
+
+const Data_for_checkout_page = async (req, res, next) => {
+  try {
+    const { addressId } = req.body;
+    console.log("Address ID", addressId);
+    const address = await addressSchema.findById(addressId).select("lat lng");
+    console.log("$$$ address", address);
+    const userLocation = {
+      lat: Number(address.lat),
+      lng: Number(address.lng),
+    };
+    const { distanceKm } = await getDistanceTime(HOTEL_LOCATION, userLocation);
+    let settings = await Setting.findOne();
+    console.log("$$$ distance in KM", distanceKm);
+    const fare = await calculateFare(distanceKm, settings);
+
+    return res.status(201).json({
+      message : "fare calculated",
+      success : true,
+      fare : fare,
+      distance: `${distanceKm.toFixed(2)} km`
+    })
+  } catch (error) {
+    return res.status(500).json({
+      message : "Something went wrong",
+      success : false,
+      error : error
+    })
+  }
 };
 
 const calculateETA = async (order) => {
@@ -95,7 +127,7 @@ const calculateETA = async (order) => {
 
     const { travelSeconds, distanceKm } = await getDistanceTime(
       HOTEL_LOCATION,
-      userLocation
+      userLocation,
     );
 
     const travelMins = Math.ceil(travelSeconds / 60);
@@ -133,7 +165,9 @@ const calculateETA = async (order) => {
     const fare = calculateFare(distanceKm, settings, subtotal);
 
     console.log(
-      `🕐 ETA: ${finalEta} mins | 🚚 Fare: ₹${fare} | 📏 Distance: ${distanceKm.toFixed(1)} km`
+      `🕐 ETA: ${finalEta} mins | 🚚 Fare: ₹${fare} | 📏 Distance: ${distanceKm.toFixed(
+        1,
+      )} km`,
     );
 
     return {
@@ -149,3 +183,4 @@ const calculateETA = async (order) => {
 };
 
 module.exports = calculateETA;
+module.exports = Data_for_checkout_page;
