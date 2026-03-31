@@ -67,6 +67,8 @@ const allowedOrigins = [
   "http://localhost:3002",
   "http://localhost:5173",
   process.env.CLIENT_URL,
+  "https://uat.hotelthegalaxy.in",
+  "https://www.uat.hotelthegalaxy.in",
 ];
 
 app.use(
