@@ -14,7 +14,7 @@ const menuItemSchema = new mongoose.Schema(
       type: String,
       unique: true,
       lowercase: true,
-      index: true,
+    
     },
 
     description: String,
@@ -23,14 +23,19 @@ const menuItemSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "SubCategory",
       required: true,
-      index: true,
+    
     },
 
     basePrice: {
       type: Number,
       required: true,
       min: 0,
-      index: true,
+    
+    },
+      todayPrice: {
+      type: Number,
+      min: 0,
+  
     },
 
     taxPercent: {
@@ -48,19 +53,19 @@ const menuItemSchema = new mongoose.Schema(
     isVeg: {
       type: Boolean,
       default: true,
-      index: true,
+   
     },
 
     isJain: {
       type: Boolean,
       default: false,
-      index: true,
+   
     },
 
     isAvailable: {
       type: Boolean,
       default: true,
-      index: true,
+   
     },
 
     availabilityReason: {
@@ -72,7 +77,7 @@ const menuItemSchema = new mongoose.Schema(
     isDeleted: {
       type: Boolean,
       default: false,
-      index: true,
+    
     },
 
     deletedAt: {
@@ -83,7 +88,7 @@ const menuItemSchema = new mongoose.Schema(
     isFeatured: {
       type: Boolean,
       default: false,
-      index: true,
+ 
     },
 
     preparationTime: {

@@ -5,21 +5,21 @@ const reviewSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
       required: true,
-      // index: true,
+
     },
 
     order: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Order",
       required: true,
-      // index: true,
+    
     },
 
     menuItem: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "MenuItem",
       required: true,
-      // index: true,
+     
     },
 
     rating: {
@@ -39,8 +39,5 @@ const reviewSchema = new mongoose.Schema(
     timestamps: true,
   },
 );
-
-// reviewSchema.index({ user: 1, order: 1, menuItem: 1 }, { unique: true });
-//  reviewSchema.index({ menuItem: 1 });
 
 module.exports = mongoose.model("Review", reviewSchema);
