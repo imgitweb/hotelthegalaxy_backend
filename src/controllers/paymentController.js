@@ -178,9 +178,9 @@ exports.verifyPayment = async (req, res, next) => {
       );
     }
 
-    await Order.findByIdAndUpdate(payment.orderId, {
-      paymentStatus: "paid",
-    });
+   await Order.findByIdAndUpdate(payment.orderId, {
+  "payment.status": "paid",
+});
 
     return res.status(200).json({
       success: true,
