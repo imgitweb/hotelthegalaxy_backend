@@ -30,21 +30,27 @@ exports.sendOtp = async (req, res) => {
     );
 
     // ✅ Create user if not exists
-    if (!user) {
-      if (!fullName) {
-        return res.status(400).json({
-          success: false,
-          message: "Full name required for signup",
-        });
-      }
+    // if (!user) {
+    //   if (!fullName) {
+    //     return res.status(400).json({
+    //       success: false,
+    //       message: "Full name required for signup",
+    //     });
+    //   }
 
-      user = new User({
-        fullName,
-        phone,
-        email: email || null,
-      });
-    }
-
+    //   user = new User({
+    //     fullName,
+    //     phone,
+    //     email: email || null,
+    //   });
+    // }
+// ✅ LOGIN FLOW → ONLY EXISTING USERS
+if (!user) {
+  return res.status(404).json({
+    success: false,
+    message: "User not found, please sign up",
+  });
+}
     const now = Date.now();
 
     // ✅ Cooldown check
@@ -113,6 +119,68 @@ exports.sendOtp = async (req, res) => {
   }
 };
 
+exports.sendSignupOtp = async (req, res) => {
+  try {
+    const { fullName, phone, email } = req.body;
+
+    if (!phone || !fullName) {
+      return res.status(400).json({
+        success: false,
+        message: "Full name and phone are required",
+      });
+    }
+
+    // ❌ Check if user already exists
+    const existingUser = await User.findOne({ phone });
+
+    if (existingUser) {
+      return res.status(400).json({
+        success: false,
+        message: "User already exists, please login",
+      });
+    }
+
+    // ✅ Create new user
+    const user = new User({
+      fullName,
+      phone,
+      email: email || null,
+    });
+
+    const now = Date.now();
+
+    const otp = generateOTP();
+    const hashedOtp = hashOTP(otp);
+
+    user.otp = hashedOtp;
+    user.otpExpiresAt = new Date(now + OTP_EXPIRY);
+    user.otpLastRequestedAt = new Date();
+    user.otpRequestCount = 1;
+
+    await user.save();
+
+    const whatsappResponse = await sendAuthTemplate(phone, otp);
+
+    if (!whatsappResponse.success) {
+      return res.status(500).json({
+        success: false,
+        message: "Failed to send OTP",
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: "Signup OTP sent",
+    });
+
+  } catch (error) {
+    console.error("SIGNUP OTP ERROR:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Signup OTP failed",
+    });
+  }
+};
 
 exports.verifyOtp = async (req, res) => {
   try {

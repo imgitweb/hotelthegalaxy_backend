@@ -128,15 +128,14 @@ const orderSchema = new mongoose.Schema(
   {
     orderNumber: {
       type: String,
-      // unique: true,
-      // index: true,
+  
     },
 
     user: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
       required: true,
-      // index: true,
+     
     },
 
     items: {
@@ -173,7 +172,7 @@ const orderSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "Rider",
       default: null,
-      // index: true,
+ 
     },
 
     status: {
@@ -182,13 +181,12 @@ const orderSchema = new mongoose.Schema(
         "pending",
         "confirmed",
         "preparing",
-        "READY",
         "out_for_delivery",
         "delivered",
         "cancelled",
       ],
       default: "pending",
-      // index: true,
+   
     },
 
     prepTimeRemaining: {
@@ -227,24 +225,14 @@ const orderSchema = new mongoose.Schema(
       },
       transactionId: String,
     },
-    distanceKm: {
-      type: Number,
-      default: 0,
-    },
-
-    pricing: {
-      subtotal: Number,
-      tax: Number,
-      deliveryCharge: Number,
-      total: Number,
-    },
+ 
   },
   {
     timestamps: true,
   },
 );
 
-orderSchema.pre("save", function (next) {
+orderSchema.pre("save", async function () {
   if (this.address?.lat && this.address?.lng) {
     this.address.location = {
       type: "Point",
@@ -255,7 +243,10 @@ orderSchema.pre("save", function (next) {
   if (this.restaurantLocation?.lat && this.restaurantLocation?.lng) {
     this.restaurantLocation.location = {
       type: "Point",
-      coordinates: [this.restaurantLocation.lng, this.restaurantLocation.lat],
+      coordinates: [
+        this.restaurantLocation.lng,
+        this.restaurantLocation.lat,
+      ],
     };
   }
 
@@ -270,8 +261,6 @@ orderSchema.pre("save", function (next) {
 
     this.deliveryPartnerLocation.updatedAt = new Date();
   }
-
-  // next();
 });
 
 module.exports = mongoose.model("Orders", orderSchema);

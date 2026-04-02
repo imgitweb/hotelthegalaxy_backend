@@ -13,10 +13,11 @@ const HOTEL_LOCATION = {
   lng: 78.94776,
 };
 
+
 exports.createOrder = async (req, res, next) => {
   try {
     const { items, addressId } = req.body;
-
+    console.log("$$ items", items, addressId)
     const userId = req.user._id;
 
     if (!items || !Array.isArray(items) || items.length === 0) {
@@ -70,13 +71,22 @@ exports.createOrder = async (req, res, next) => {
         const total = price * item.quantity;
         subtotal += total;
 
-        orderItems.push({
-          menuItem: menuItem._id,
-          name: menuItem.name,
-          price,
-          quantity: item.quantity,
-          total,
-        });
+        // orderItems.push({
+        //   menuItem: menuItem._id,
+        //   name: menuItem.name,
+        //   price,
+        //   quantity: item.quantity,
+        //   total,
+        // });
+    
+orderItems.push({
+  menuItem: menuItem._id,
+  name: menuItem.name,
+  price,
+  quantity: item.quantity,
+  total: price * item.quantity,
+  image: menuItem.images?.[0]?.url || null, // ✅ CRITICAL
+});
       }
 
       if (item.combo) {
@@ -150,6 +160,7 @@ exports.createOrder = async (req, res, next) => {
   }
 };
 
+
 exports.getMyOrders = async (req, res, next) => {
   try {
     const orders = await Order.find({ user: req.user.id })
@@ -188,17 +199,9 @@ exports.getOrderById = async (req, res, next) => {
   try {
     const id = req.params.id;
 
-    const isMongoId = /^[0-9a-fA-F]{24}$/.test(id);
-
-    const payment = await Payment.findOne({userId : req.user.id, razorpayOrderId : id});
-
-    console.log("Payment info:", payment);
-
-    const order = await Order.findById(payment.orderId)
+    const order = await Order.findById(id)
       .populate("items.menuItem", "name basePrice images user")
       .populate("items.combo", "name price image");
-
-      console.log("Fetched Order:", order);
 
     if (!order) {
       return res.status(404).json({
