@@ -257,8 +257,7 @@ const slugify = require("slugify");
 const { AppError } = require("../../middleware/errorHandler");
 
 class MenuService {
-
-  // ✅ CREATE MENU ITEM
+ 
   static async create(data) {
     if (!data.name || !data.basePrice || !data.subCategory) {
       throw new AppError("Required fields missing", 400);
@@ -284,7 +283,6 @@ class MenuService {
     return MenuItem.create({ ...data, slug });
   }
 
-  // ✅ GET ALL
   static async getAll(query = {}) {
     const {
       page = 1,
@@ -298,7 +296,7 @@ class MenuService {
     const filter = {};
 
     if (showDeleted === "all") {
-      // no isDeleted filter
+  
     } else if (showDeleted === "true") {
       filter.isDeleted = true;
     } else {
@@ -336,7 +334,6 @@ class MenuService {
     };
   }
 
-  // ✅ GET BY ID
   static async getById(id) {
     const item = await MenuItem.findOne({ _id: id, isDeleted: false }).populate({
       path: "subCategory",
@@ -348,10 +345,8 @@ class MenuService {
 
     return item;
   }
-
-  // ✅ UPDATE MENU ITEM
   static async update(id, data) {
-    // ✅ findOne with explicit filter — safe even without hook
+
     const item = await MenuItem.findOne({ _id: id, isDeleted: false });
 
     if (!item) throw new AppError("Menu item not found", 404);
@@ -387,11 +382,10 @@ class MenuService {
     return updated;
   }
 
-  // ✅ SOFT DELETE
   static async delete(id) {
-    // ✅ findOneAndUpdate — single atomic op, no hook interference
+ 
     const item = await MenuItem.findOneAndUpdate(
-      { _id: id, isDeleted: false },   // only delete if currently active
+      { _id: id, isDeleted: false },  
       {
         $set: {
           isDeleted: true,
@@ -407,11 +401,11 @@ class MenuService {
     return item;
   }
 
-  // ✅ RESTORE
+ 
   static async restore(id) {
-    // ✅ findOneAndUpdate — directly targets deleted item, no hook issue
+ 
     const item = await MenuItem.findOneAndUpdate(
-      { _id: id, isDeleted: true },    // only restore if currently deleted
+      { _id: id, isDeleted: true },
       {
         $set: {
           isDeleted: false,

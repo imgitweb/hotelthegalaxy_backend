@@ -32,9 +32,13 @@ const orderItemSchema = new mongoose.Schema(
 
     total: {
       type: Number,
-      // required: true,
       min: 0,
-      default  : 0
+      default: 0,
+    },
+
+    image: {
+      type: String,
+      default: null,
     },
   },
   { _id: false },
@@ -52,14 +56,12 @@ const orderAddressSchema = new mongoose.Schema(
 
     lat: {
       type: Number,
-      required: true,
-      // index: true,
+      default: 0,
     },
 
     lng: {
       type: Number,
-      required: true,
-      // index: true,
+      default: 0,
     },
 
     location: {
@@ -70,8 +72,7 @@ const orderAddressSchema = new mongoose.Schema(
       },
       coordinates: {
         type: [Number],
-        // required: true,
-        // index: "2dsphere",
+        default: [0, 0],
       },
     },
   },
@@ -92,7 +93,6 @@ const restaurantLocationSchema = new mongoose.Schema(
       coordinates: {
         type: [Number],
         required: true,
-        // index: "2dsphere",
       },
     },
   },
@@ -117,7 +117,6 @@ const partnerLocationSchema = new mongoose.Schema(
       },
       coordinates: {
         type: [Number],
-        // index: "2dsphere",
       },
     },
   },
@@ -128,14 +127,12 @@ const orderSchema = new mongoose.Schema(
   {
     orderNumber: {
       type: String,
-  
     },
 
     user: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
       required: true,
-     
     },
 
     items: {
@@ -147,10 +144,27 @@ const orderSchema = new mongoose.Schema(
     },
 
     pricing: {
-      subtotal: Number,
-      tax: Number,
-      total: Number,
-      deliveryFee: Number,
+      subtotal: {
+        type: Number,
+        default: 0,
+      },
+      tax: {
+        type: Number,
+        default: 0,
+      },
+      deliveryCharge: {           // ✅ fix: was missing, controller uses this
+        type: Number,
+        default: 0,
+      },
+      total: {
+        type: Number,
+        default: 0,
+      },
+    },
+
+    distanceKm: {                 // ✅ fix: was missing, controller saves this
+      type: Number,
+      default: 0,
     },
 
     address: {
@@ -172,7 +186,6 @@ const orderSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "Rider",
       default: null,
- 
     },
 
     status: {
@@ -186,7 +199,6 @@ const orderSchema = new mongoose.Schema(
         "cancelled",
       ],
       default: "pending",
-   
     },
 
     prepTimeRemaining: {
@@ -201,10 +213,12 @@ const orderSchema = new mongoose.Schema(
 
     distance: {
       type: Number,
+      default: 0,
     },
 
     duration: {
       type: Number,
+      default: 0,
     },
 
     timeline: {
@@ -217,21 +231,32 @@ const orderSchema = new mongoose.Schema(
     },
 
     payment: {
-      method: String,
+      method: {
+        type: String,
+        default: null,
+      },
       status: {
         type: String,
         enum: ["pending", "paid", "failed"],
         default: "pending",
       },
-      transactionId: String,
+      transactionId: {
+        type: String,
+        default: null,
+      },
     },
- 
+
+    noContact: {                  // ✅ fix: checkout page sends this but field missing tha
+      type: Boolean,
+      default: false,
+    },
   },
   {
     timestamps: true,
   },
 );
 
+// ✅ Pre-save hook — sab location fields auto-set
 orderSchema.pre("save", async function () {
   if (this.address?.lat && this.address?.lng) {
     this.address.location = {

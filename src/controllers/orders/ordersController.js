@@ -1,23 +1,28 @@
 const Order = require("../../models/User/ordersModel");
 const MenuItem = require("../../models/dining/menuItemmodel");
-const DailyRoster = require("../../models/dining/DailyRoster");
 const Combo = require("../../models/dining/combomodel");
 const Review = require("../../models/reviewModel");
 const Address = require("../../models/User/address");
 const getDistanceKm = require("../../utils/distanceService");
 const { calculateETA } = require("../../utils/calculateETA");
-const Payment = require("../../models/paymentModel");
 
 const HOTEL_LOCATION = {
   lat: 22.061401,
   lng: 78.94776,
 };
+function calculateDeliveryCharge(distanceKm) {
+  if (distanceKm <= 3) return 30;
+  if (distanceKm <= 7) return 50;
+  if (distanceKm <= 15) return 70;
+  return 100;
+}
 
-
+// ─────────────────────────────────────────
+// CREATE ORDER (direct — without payment)
+// ─────────────────────────────────────────
 exports.createOrder = async (req, res, next) => {
   try {
     const { items, addressId } = req.body;
-    console.log("$$ items", items, addressId)
     const userId = req.user._id;
 
     if (!items || !Array.isArray(items) || items.length === 0) {
@@ -30,7 +35,6 @@ exports.createOrder = async (req, res, next) => {
     let selectedAddress = null;
     if (addressId) {
       selectedAddress = await Address.findById(addressId);
-
       if (!selectedAddress) {
         return res.status(404).json({
           success: false,
@@ -38,8 +42,6 @@ exports.createOrder = async (req, res, next) => {
         });
       }
     }
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
 
     let subtotal = 0;
     const orderItems = [];
@@ -51,67 +53,68 @@ exports.createOrder = async (req, res, next) => {
           message: "Invalid quantity",
         });
       }
+      const hasMenuItem = !!item.menuItem;
+      const hasCombo = !!item.combo;
 
-      if (!!item.menuItem === !!item.combo) {
+      if (!hasMenuItem && !hasCombo) {
         return res.status(400).json({
           success: false,
           message: "Each item must have either menuItem or combo",
         });
       }
 
-      if (item.menuItem) {
+      if (hasMenuItem && hasCombo) {
+        return res.status(400).json({
+          success: false,
+          message: "Each item cannot have both menuItem and combo",
+        });
+      }
+
+      if (hasMenuItem) {
         const menuItem = await MenuItem.findById(item.menuItem);
         if (!menuItem) {
-          return res
-            .status(404)
-            .json({ success: false, message: "Menu item not found" });
+          return res.status(404).json({
+            success: false,
+            message: "Menu item not found",
+          });
         }
 
         const price = menuItem.basePrice;
-        const total = price * item.quantity;
-        subtotal += total;
+        subtotal += price * item.quantity;
 
-        // orderItems.push({
-        //   menuItem: menuItem._id,
-        //   name: menuItem.name,
-        //   price,
-        //   quantity: item.quantity,
-        //   total,
-        // });
-    
-orderItems.push({
-  menuItem: menuItem._id,
-  name: menuItem.name,
-  price,
-  quantity: item.quantity,
-  total: price * item.quantity,
-  image: menuItem.images?.[0]?.url || null, // ✅ CRITICAL
-});
+        orderItems.push({
+          menuItem: menuItem._id,
+          name: menuItem.name,
+          price,
+          quantity: item.quantity,
+          total: price * item.quantity,
+          image: menuItem.images?.[0]?.url || null,
+        });
       }
 
-      if (item.combo) {
+      if (hasCombo) {
         const combo = await Combo.findById(item.combo);
         if (!combo) {
-          return res
-            .status(404)
-            .json({ success: false, message: "Combo not found" });
+          return res.status(404).json({
+            success: false,
+            message: "Combo not found",
+          });
         }
 
         const price = combo.price;
-        const total = price * item.quantity;
-        subtotal += total;
+        subtotal += price * item.quantity;
 
         orderItems.push({
           combo: combo._id,
           name: combo.name,
           price,
           quantity: item.quantity,
-          total,
+          total: price * item.quantity,
+          image: combo.image || null,
         });
       }
     }
 
-    // Default values if no address provided
     const userLocation = selectedAddress
       ? { lat: selectedAddress.lat, lng: selectedAddress.lng }
       : { lat: 0, lng: 0 };
@@ -119,14 +122,21 @@ orderItems.push({
     const distanceKm = selectedAddress
       ? await getDistanceKm(HOTEL_LOCATION, userLocation)
       : 0;
-    const deliveryCharge = calculateDeliveryCharge(distanceKm, subtotal);
+
+    const deliveryCharge = selectedAddress
+      ? calculateDeliveryCharge(distanceKm)
+      : 0;
 
     const tax = Math.round(subtotal * 0.05);
     const total = subtotal + tax + deliveryCharge;
 
+    const etaData = selectedAddress
+      ? await calculateETA({ address: userLocation, status: "pending" })
+      : { eta: null };
+
     const order = await Order.create({
       orderNumber: "ORD-" + Date.now(),
-      user: req.user.id,
+      user: userId,
       items: orderItems,
       pricing: {
         subtotal,
@@ -135,9 +145,7 @@ orderItems.push({
         total,
       },
       distanceKm,
-      eta: selectedAddress
-        ? (await calculateETA({ address: userLocation, status: "pending" })).eta
-        : null,
+      eta: etaData.eta || 0,
       address: selectedAddress
         ? {
             street: selectedAddress.street,
@@ -146,7 +154,10 @@ orderItems.push({
             lng: selectedAddress.lng,
             location: selectedAddress.location,
           }
-        : {},
+        : {
+            lat: 0,
+            lng: 0,
+          },
       status: "pending",
     });
 
@@ -159,8 +170,6 @@ orderItems.push({
     next(error);
   }
 };
-
-
 exports.getMyOrders = async (req, res, next) => {
   try {
     const orders = await Order.find({ user: req.user.id })
@@ -200,7 +209,7 @@ exports.getOrderById = async (req, res, next) => {
     const id = req.params.id;
 
     const order = await Order.findById(id)
-      .populate("items.menuItem", "name basePrice images user")
+      .populate("items.menuItem", "name basePrice images")
       .populate("items.combo", "name price image");
 
     if (!order) {
@@ -228,12 +237,12 @@ exports.getOrderById = async (req, res, next) => {
       data: order,
     });
   } catch (error) {
-    console.log("Get Order By ID Error:", error);
+    console.error("Get Order By ID Error:", error.message);
     next(error);
   }
 };
 
-exports.cancelOrder = async (req, res) => {
+exports.cancelOrder = async (req, res, next) => {
   try {
     const { orderId } = req.params;
 
@@ -242,7 +251,7 @@ exports.cancelOrder = async (req, res) => {
     if (!order) {
       return res.status(404).json({
         success: false,
-        message: "Order not found",clear
+        message: "Order not found",
       });
     }
 
@@ -265,23 +274,22 @@ exports.cancelOrder = async (req, res) => {
     if (order.rider) {
       return res.status(400).json({
         success: false,
-        message: "Order cannot be cancelled because rider is already assigned",
+        message:
+          "Order cannot be cancelled because a rider is already assigned",
       });
     }
 
     order.status = "cancelled";
+    order.timeline.cancelledAt = new Date();
     await order.save();
 
     res.status(200).json({
       success: true,
       message: "Order cancelled successfully",
-      order,
+      data: order,
     });
   } catch (err) {
-    res.status(500).json({
-      success: false,
-      message: err.message,
-    });
+    next(err);
   }
 };
 
@@ -299,7 +307,7 @@ exports.updateOrderStatus = async (req, res, next) => {
       });
     }
 
-    const order = await Order.findByIdAndUpdate(id, { status }, { new: true });
+    const order = await Order.findById(id);
 
     if (!order) {
       return res.status(404).json({
@@ -307,6 +315,32 @@ exports.updateOrderStatus = async (req, res, next) => {
         message: "Order not found",
       });
     }
+    if (order.user.toString() !== req.user.id) {
+      return res.status(403).json({
+        success: false,
+        message: "Not authorized",
+      });
+    }
+
+    const cancellableStatuses = ["pending", "confirmed"];
+    if (!cancellableStatuses.includes(order.status)) {
+      return res.status(400).json({
+        success: false,
+        message: "Order cannot be cancelled at this stage",
+      });
+    }
+
+    if (order.rider) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "Order cannot be cancelled because a rider is already assigned",
+      });
+    }
+
+    order.status = "cancelled";
+    order.timeline.cancelledAt = new Date();
+    await order.save();
 
     res.status(200).json({
       success: true,
