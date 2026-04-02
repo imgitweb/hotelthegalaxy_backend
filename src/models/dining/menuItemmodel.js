@@ -127,9 +127,9 @@ menuItemSchema.pre("save", async function () {
   this.slug = slug;
 });
 
-menuItemSchema.pre(/^find/, function () {
-  this.where({ isDeleted: false });
-});
+// menuItemSchema.pre(/^find/, function () {
+//   this.where({ isDeleted: false });
+// });
 
 menuItemSchema.index({ subCategory: 1, isAvailable: 1 });
 menuItemSchema.index({ name: "text", description: "text" });
