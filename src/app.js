@@ -27,7 +27,7 @@ const adminOrderRoutes = require("./routes/admin/adminOrderRoutes");
 const enquiryRoutes = require("./routes/enquiryRoutes")
 const reviewRoutes = require("./routes/reviewRoutes")
 const combsRoute = require("./routes/public/combo.routes");
-// const offerRoute = require("./routes/paymentRoutes");
+const paymentRoutes = require("./routes/paymentRoutes");
 
 const whatsappRoutes = require("./routes/whatsappRoutes");
 const chatRoutes = require("./routes/chatRoutes");
@@ -124,7 +124,7 @@ app.use("/api/v1/dining/offers", offerRoutepublic);
 app.use("/api/v1/admin/dashboard", dashboardRoutes);
 app.use("/api/v1/admin/riders", riderRoutes);
 app.use("/api/v1/admin/staff", staffRoutes);
-app.use("/api/v1/payment", require("./routes/paymentRoutes"));
+app.use("/api/v1/payment" ,paymentRoutes);
 app.use("/api/v1/rooms", roomRoutes);
 
 app.use(
