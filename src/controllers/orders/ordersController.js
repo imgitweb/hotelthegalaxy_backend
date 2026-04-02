@@ -6,16 +6,18 @@ const Review = require("../../models/reviewModel");
 const Address = require("../../models/User/address");
 const getDistanceKm = require("../../utils/distanceService");
 const { calculateETA } = require("../../utils/calculateETA");
+const Payment = require("../../models/paymentModel");
 
 const HOTEL_LOCATION = {
   lat: 22.061401,
   lng: 78.94776,
 };
 
+
 exports.createOrder = async (req, res, next) => {
   try {
     const { items, addressId } = req.body;
-
+    console.log("$$ items", items, addressId)
     const userId = req.user._id;
 
     if (!items || !Array.isArray(items) || items.length === 0) {
@@ -69,13 +71,22 @@ exports.createOrder = async (req, res, next) => {
         const total = price * item.quantity;
         subtotal += total;
 
-        orderItems.push({
-          menuItem: menuItem._id,
-          name: menuItem.name,
-          price,
-          quantity: item.quantity,
-          total,
-        });
+        // orderItems.push({
+        //   menuItem: menuItem._id,
+        //   name: menuItem.name,
+        //   price,
+        //   quantity: item.quantity,
+        //   total,
+        // });
+    
+orderItems.push({
+  menuItem: menuItem._id,
+  name: menuItem.name,
+  price,
+  quantity: item.quantity,
+  total: price * item.quantity,
+  image: menuItem.images?.[0]?.url || null, // ✅ CRITICAL
+});
       }
 
       if (item.combo) {
@@ -149,6 +160,7 @@ exports.createOrder = async (req, res, next) => {
   }
 };
 
+
 exports.getMyOrders = async (req, res, next) => {
   try {
     const orders = await Order.find({ user: req.user.id })
@@ -187,10 +199,8 @@ exports.getOrderById = async (req, res, next) => {
   try {
     const id = req.params.id;
 
-    const isMongoId = /^[0-9a-fA-F]{24}$/.test(id);
-
-    const order = await Order.findOne(isMongoId ? { _id: id } : { orderId: id })
-      .populate("items.menuItem", "name basePrice images")
+    const order = await Order.findById(id)
+      .populate("items.menuItem", "name basePrice images user")
       .populate("items.combo", "name price image");
 
     if (!order) {
@@ -222,6 +232,7 @@ exports.getOrderById = async (req, res, next) => {
     next(error);
   }
 };
+
 exports.cancelOrder = async (req, res) => {
   try {
     const { orderId } = req.params;
@@ -231,7 +242,7 @@ exports.cancelOrder = async (req, res) => {
     if (!order) {
       return res.status(404).json({
         success: false,
-        message: "Order not found",
+        message: "Order not found",clear
       });
     }
 

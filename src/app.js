@@ -67,6 +67,8 @@ const allowedOrigins = [
   "http://localhost:3002",
   "http://localhost:5173",
   process.env.CLIENT_URL,
+  "https://uat.hotelthegalaxy.in",
+  "https://www.uat.hotelthegalaxy.in",
 ];
 
 app.use(
@@ -110,6 +112,7 @@ app.use("/api/v1/admin/dining", adminOrderRoutes);
 app.use("/api/v1/enquiries", enquiryRoutes);
 app.use("/api/v1/reviews", reviewRoutes);
 app.use("/api/v1/dining", combsRoute);
+
 // app.use("/api/v1/admin/dining", offerRoute);
 
 app.use("/api/v1/settings", settingRoutes);

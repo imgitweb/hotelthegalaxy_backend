@@ -45,7 +45,7 @@ exports.createOrder = async (req, res, next) => {
       total: item.price * item.quantity,
     }));
 
-    const totalAmount = req.body?.total;
+    const totalAmount = total;
 
     const newOrder = new Order({
       user: userId,
@@ -100,6 +100,7 @@ exports.createOrder = async (req, res, next) => {
     next(err);
   }
 };
+
 
 exports.verifyPayment = async (req, res, next) => {
   try {
@@ -178,9 +179,9 @@ exports.verifyPayment = async (req, res, next) => {
       );
     }
 
-    await Order.findByIdAndUpdate(payment.orderId, {
-      paymentStatus: "paid",
-    });
+   await Order.findByIdAndUpdate(payment.orderId, {
+  "payment.status": "paid",
+});
 
     return res.status(200).json({
       success: true,

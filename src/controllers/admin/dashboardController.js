@@ -5,7 +5,6 @@ const VALID_ORDER_FILTER = {
   status: { $ne: "cancelled" },
 };
 
-
 exports.getDashboardStats = async (req, res, next) => {
   try {
     const today = new Date();
@@ -35,15 +34,23 @@ exports.getDashboardStats = async (req, res, next) => {
       createdAt: { $gte: month },
     });
 
-    const revenue = await Order.aggregate([
-      { $match: VALID_ORDER_FILTER },
-      {
-        $group: {
-          _id: null,
-          totalRevenue: { $sum: "$pricing.total" },
-        },
-      },
-    ]);
+  const revenue = await Order.aggregate([
+  {
+    $match: {
+      status: { $ne: "cancelled" },
+      "payment.status": "paid",
+    },
+  },
+
+  { $unwind: "$items" },
+
+  {
+    $group: {
+      _id: null,
+      totalRevenue: { $sum: "$items.total" },
+    },
+  },
+]);
 
     res.json({
       success: true,
@@ -254,3 +261,5 @@ data:data[0] || null
 next(err);
 }
 };
+
+
