@@ -4,6 +4,8 @@ const router = express.Router();
 const { verifyWebhook, receiveMessage } = require("../controllers/whatsappController");
 
 router.get("/", verifyWebhook);
-router.post("/", receiveMessage);
+router.post("/", (req,res)=>{
+    console.log("Request data", req.body)
+});
 
 module.exports = router;

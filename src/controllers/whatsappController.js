@@ -4,10 +4,10 @@ const runLangGraph = require("../langraph/services/langgraphService");
 const verifyWebhook = (req, res) => {
 
   console.log("Webhook verification triggered");
-
-  const mode = req.query["hub.mode"];
-  const token = req.query["hub.verify_token"];
-  const challenge = req.query["hub.challenge"];
+  console.log("$$$ query",req.query)
+  const mode = req.query["hub_mode"];
+  const token = req.query["hub_verify_token"];
+  const challenge = req.query["hub_challenge"];
 
   console.log("Mode:", mode);
   console.log("Token from Meta:", token);

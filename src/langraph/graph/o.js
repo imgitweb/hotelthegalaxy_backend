@@ -51,7 +51,7 @@ async function agentDecisionNode(state) {
   console.log(`🧐 Memory Context for ${phone}:`, previousBotMessage.substring(0, 60).replace(/\n/g, ' ') + "...");
 
   // 🔥 FAST ROUTING
-  if (previousBotMessage.includes("Welcome to Royal Hotel") || previousBotMessage.includes("How may I humbly serve you")) {
+  if (previousBotMessage.includes("Welcome to Hotel The Galaxy") || previousBotMessage.includes("How may I humbly serve you")) {
     if (msg === "1" || msg.includes("menu")) return { ...state, aiIntent: "SHOW_MENU", aiData: {} };
     if (msg === "2" || msg.includes("track")) return { ...state, aiIntent: "TRACK_ORDER", aiData: {} };
     if (msg === "3" || msg.includes("help")) return { ...state, aiIntent: "HELP", aiData: {} };
@@ -109,7 +109,7 @@ async function actionExecutionNode(state) {
   switch (aiIntent) {
     case "GREETING": {
       const hasActiveOrder = await getActiveOrder(user._id);
-      replyText = `👑 *Welcome to Royal Hotel*\n\nHow may I humbly serve you today, esteemed guest?\n\nReply with a number:\n*1.* 🍔 Order a Feast (Menu)`;
+      replyText = `👑 *Welcome to Hotel The Galaxy*\n\nHow may I humbly serve you today, esteemed guest?\n\nReply with a number:\n*1.* 🍔 Order a Feast (Menu)`;
       if (hasActiveOrder) replyText += `\n*2.* 📦 Track Your Royal Order`;
       replyText += `\n*3.* ℹ️ Seek My Assistance (Help)`;
       break;
