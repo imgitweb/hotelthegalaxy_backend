@@ -2,99 +2,38 @@ const mongoose = require("mongoose");
 
 const paymentSchema = new mongoose.Schema(
   {
-    userId: {
+    order: {
       type: mongoose.Schema.Types.ObjectId,
-      ref: "User",
-      required: [true, "User ID is required"],
-      index: true,
-    },
-
-    orderId: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "Order",
-      required: [true, "Order ID is required"],
-      index: true,
-    },
-
-    razorpayOrderId: {
-      type: String,
+      ref: "Orders",
       required: true,
-      unique: true,
-    },
-
-    razorpayPaymentId: {
-      type: String,
-      default: null,
       index: true,
     },
-
-    razorpaySignature: {
-      type: String,
-      default: null,
-    },
-
     amount: {
       type: Number,
       required: true,
-      min: [1, "Amount must be greater than 0"],
     },
-
-    currency: {
+    gateway: {
       type: String,
-      default: "INR",
+      enum: ["RAZORPAY", "STRIPE", "CASH", "UPI"],
+      default: "RAZORPAY",
     },
-
+    transactionId: {
+      type: String,
+      default: null,
+    },
     status: {
       type: String,
-      enum: ["created", "captured", "failed", "cancelled", "refunded"],
-      default: "created",
+      enum: ["PENDING", "SUCCESS", "FAILED", "REFUNDED"],
+      default: "PENDING",
       index: true,
     },
-
-    isCaptured: {
-      type: Boolean,
-      default: false,
+    metadata: {
+      type: Object,
+      default: {},
     },
-
-    paymentMethod: {
-      type: String,
-      enum: ["card", "upi", "netbanking", "wallet", "emi", "unknown"],
-      default: "unknown",
-    },
-
-    razorpayStatus: {
-      type: String,
-      default: null,
-    },
-
-    receipt: {
-      type: String,
-      default: null,
-      trim : true
-    },
-
-    failureReason: {
-      type: String,
-      default: null,
-    },
-
-    refunds: [
-      {
-        refundId: String,
-        amount: Number,
-        status: String,
-        createdAt: {
-          type: Date,
-          default: Date.now,
-        },
-      },
-    ],
   },
-  {
-    timestamps: true,
-  }
+  { timestamps: true }
 );
 
-const Payment = mongoose.model("Payment", paymentSchema);
-
-module.exports = Payment;
+module.exports =
+  mongoose.models.Payment || mongoose.model("Payment", paymentSchema);

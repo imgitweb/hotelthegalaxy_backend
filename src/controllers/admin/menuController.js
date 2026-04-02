@@ -114,11 +114,8 @@ const update = async (req, res) => {
 
 const remove = async (req, res) => {
   try {
-    const item = await MenuService.update(req.params.id, {
-      isDeleted: true,
-      deletedAt: new Date(),
-      isAvailable: false,
-    });
+    // ✅ MenuService.delete() call karo
+    const item = await MenuService.delete(req.params.id);
 
     return res.json({
       success: true,
@@ -126,7 +123,7 @@ const remove = async (req, res) => {
       data: item,
     });
   } catch (err) {
-    return res.status(500).json({
+    return res.status(err.statusCode || 500).json({
       success: false,
       message: err.message,
     });
@@ -135,11 +132,8 @@ const remove = async (req, res) => {
 
 const restore = async (req, res) => {
   try {
-    const item = await MenuService.update(req.params.id, {
-      isDeleted: false,
-      deletedAt: null,
-      isAvailable: true,
-    });
+    // ✅ MenuService.restore() call karo
+    const item = await MenuService.restore(req.params.id);
 
     return res.json({
       success: true,
@@ -147,7 +141,7 @@ const restore = async (req, res) => {
       data: item,
     });
   } catch (err) {
-    return res.status(500).json({
+    return res.status(err.statusCode || 500).json({
       success: false,
       message: err.message,
     });
