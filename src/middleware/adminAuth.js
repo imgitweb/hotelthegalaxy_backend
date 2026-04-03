@@ -4,13 +4,13 @@ const { AppError } = require("./errorHandler");
 const adminAuth = (req, res, next) => {
   try {
     const token = req.cookies.adminAccessToken;
-
+    console.log("$$$ token",token)
     if (!token) {
       return next(new AppError("Not authorized. Please login.", 401));
     }
 
     const decoded = jwt.verify(token, process.env.JWT_ACCESS_SECRET);
-
+    console.log("Decode", decoded)
     if (!decoded?.role) {
       return next(new AppError("Invalid access token", 401));
     }

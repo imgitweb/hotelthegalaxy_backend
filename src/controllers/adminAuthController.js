@@ -24,7 +24,7 @@ exports.adminLogin = async (req, res, next) => {
     if (!admin || !admin.isActive) {
       return next(new AppError("Invalid email or password", 401));
     }
-
+    console.log("email", email, password);
     const isMatch = await admin.comparePassword(password);
     if (!isMatch) {
       return next(new AppError("Invalid email or password", 401));
@@ -32,6 +32,8 @@ exports.adminLogin = async (req, res, next) => {
 
     const accessToken = generateAccessToken(admin);
     const refreshToken = generateRefreshToken(admin);
+
+    console.log("Access token", accessToken, refreshToken);
 
     const cookieOptions = {
       httpOnly: true,
