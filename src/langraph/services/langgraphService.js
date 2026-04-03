@@ -1,5 +1,5 @@
 const { buildOrderGraph } = require("../graph/orderGraph");
-const { sendWhatsAppMessage } = require("./whatsappService");
+const { sendTextMessage } = require("./whatsappService");
 
 const graph = buildOrderGraph();
 
@@ -26,7 +26,7 @@ async function runLangGraph({ phone, text, channel = "whatsapp" }) {
     // 🔥 ONLY send to WhatsApp if the channel is "whatsapp"
     if (output?.replyText && channel === "whatsapp") {
       try {
-        await sendWhatsAppMessage(normalizedPhone, output.replyText, output.buttons);
+        await sendTextMessage(normalizedPhone, output.replyText, output.buttons);
       } catch (sendError) {
         console.error("❌ Failed to send WhatsApp message");
       }
