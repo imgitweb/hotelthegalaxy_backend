@@ -15,7 +15,7 @@ const userSchema = new mongoose.Schema(
       required: true,
       unique: true,
       index: true,
-      match: [/^[6-9]\d{11}$/, "Invalid Indian mobile number"],
+     match: [/^\+91[6-9]\d{9}$/, "Invalid Indian mobile number"],
     },
 
     email: {
