@@ -24,15 +24,15 @@ const newsletterRoutes = require("./routes/newsletterRoutes");
 const offerRoutes = require("./routes/offerRoutes");
 const combsRoutes = require("./routes/admin/comboRoutes");
 const adminOrderRoutes = require("./routes/admin/adminOrderRoutes");
-const enquiryRoutes = require("./routes/enquiryRoutes")
-const reviewRoutes = require("./routes/reviewRoutes")
+const enquiryRoutes = require("./routes/enquiryRoutes");
+const reviewRoutes = require("./routes/reviewRoutes");
 const combsRoute = require("./routes/public/combo.routes");
-// const offerRoute = require("./routes/paymentRoutes");
+const paymentRoutes = require("./routes/paymentRoutes");
 
 const whatsappRoutes = require("./routes/whatsappRoutes");
 const chatRoutes = require("./routes/chatRoutes");
 
-const settingRoutes = require("./routes/settingRoutes")
+const settingRoutes = require("./routes/settingRoutes");
 
 const offerRoutepublic = require("./routes/public/offers.routes");
 const dashboardRoutes = require("./routes/admin/dashboardRoutes");
@@ -41,59 +41,87 @@ const staffRoutes = require("./routes/admin/staffRoutes");
 const roomRoutes = require("./routes/roomRoutes");
 const path = require("path");
 const router = require("express").Router();
+
 const app = express();
 
-app.use(mongoSanitize());
-app.use(xss());
-app.use(compression());
-app.use(express.json({ limit: "10kb" }));
-app.use(express.urlencoded({ extended: false }));
-app.use(cookieParser());
-app.use(httpLogger);
+// ========================================================
+// 1. CORS CONFIGURATION (MUST BE AT THE VERY TOP)
+// ========================================================
+const allowedOrigins = [
+  "http://localhost:3000",
+  "http://localhost:3002",
+  "http://localhost:5173",
+  "http://127.0.0.1:3000",
+  process.env.CLIENT_URL,
+  "https://uat.hotelthegalaxy.in",
+  "https://www.uat.hotelthegalaxy.in",
+].filter(Boolean);
 
-if (process.env.NODE_ENV === "development") {
-  app.use(morgan("dev"));
-}
+const corsOptions = {
+  origin: function (origin, callback) {
+    if (!origin) return callback(null, true);
+    if (allowedOrigins.includes(origin)) {
+      return callback(null, true);
+    }
+    return callback(new Error("Not allowed by CORS"));
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'], // Explicitly allow methods
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'] // Explicitly allow headers
+};
+
+// Use CORS for all routes
+app.use(cors(corsOptions));
+
+// 👈 FIX: Yahan String '/*' ki jagah Native RegExp /.*/ use kiya hai
+// Ye naye Express versions mein crash nahi hoga
+app.options(/.*/, cors(corsOptions));
+
+
+// ========================================================
+// 2. SECURITY HEADERS & PROXY
+// ========================================================
 
 app.set("trust proxy", 1);
 app.use(
   helmet({
     crossOriginResourcePolicy: { policy: "cross-origin" },
-  }),
+  })
 );
 
-const allowedOrigins = [
-  "http://localhost:3000",
-  "http://localhost:3002",
-  "http://localhost:5173",
-  process.env.CLIENT_URL,
-  "https://uat.hotelthegalaxy.in",
-  "https://www.uat.hotelthegalaxy.in",
-];
+// ========================================================
+// 3. BODY PARSERS & SANITIZATION
+// ========================================================
+app.use(express.json({ limit: "10kb" }));
+app.use(express.urlencoded({ extended: false }));
+app.use(cookieParser());
+app.use(mongoSanitize());
+app.use(xss());
+app.use(compression());
 
-app.use(
-  cors({
-    origin: function (origin, callback) {
-      if (!origin) return callback(null, true);
+// ========================================================
+// 4. LOGGERS
+// ========================================================
+app.use(httpLogger);
+if (process.env.NODE_ENV === "development") {
+  app.use(morgan("dev"));
+}
 
-      if (allowedOrigins.includes(origin)) {
-        return callback(null, true);
-      }
-
-      return callback(new Error("Not allowed by CORS"));
-    },
-    credentials: true,
-  }),
-);
+// ========================================================
+// 5. STATIC FILES
+// ========================================================
 app.use(
   "/uploads",
-  express.static(path.join(__dirname, "..", "/public/uploads")),
+  express.static(path.join(__dirname, "..", "/public/uploads"))
 );
 console.log(
   "Serving static files from:",
-  path.join(__dirname, "..", "/public/uploads"),
+  path.join(__dirname, "..", "/public/uploads")
 );
 
+// ========================================================
+// 6. ROUTES
+// ========================================================
 app.use("/api/v1/auth", authRoutes);
 app.use("/api/v1/admin", adminRoutes);
 app.use("/api/v1/files", fileRoutes);
@@ -113,26 +141,27 @@ app.use("/api/v1/enquiries", enquiryRoutes);
 app.use("/api/v1/reviews", reviewRoutes);
 app.use("/api/v1/dining", combsRoute);
 
-// app.use("/api/v1/admin/dining", offerRoute);
-
 app.use("/api/v1/settings", settingRoutes);
 
-app.use("/api/webhook", whatsappRoutes);
+app.use("/webhook", whatsappRoutes);
 app.use("/api", chatRoutes);
 
 app.use("/api/v1/dining/offers", offerRoutepublic);
 app.use("/api/v1/admin/dashboard", dashboardRoutes);
 app.use("/api/v1/admin/riders", riderRoutes);
 app.use("/api/v1/admin/staff", staffRoutes);
-app.use("/api/v1/payment", require("./routes/paymentRoutes"));
+app.use("/api/v1/payment", paymentRoutes);
 app.use("/api/v1/rooms", roomRoutes);
 
 app.use(
   "/api/v1/admin/availability",
-  require("./routes/admin/availabilityRoutes"),
+  require("./routes/admin/availabilityRoutes")
 );
 app.use("/api/geocode", require("./routes/geocodeRoutes"));
 
+// ========================================================
+// 7. ERROR HANDLING
+// ========================================================
 app.use(notFound);
 app.use(errorHandler);
 
