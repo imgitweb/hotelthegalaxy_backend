@@ -1,10 +1,6 @@
 const DailyRoster = require("../../models/dining/DailyRoster");
 const mongoose = require("mongoose");
 
-/**
- * @desc    Create or Update Daily Roster (Bulk)
- * @route   POST /api/v1/admin/roster
- */
 const upsertRoster = async (req, res, next) => {
   try {
     const { dates, items, notes } = req.body;
@@ -80,10 +76,6 @@ const upsertRoster = async (req, res, next) => {
   }
 };
 
-/**
- * @desc    Get Roster By Date
- * @route   GET /api/v1/admin/roster/getrosterbydate
- */
 const getRosterByDate = async (req, res, next) => {
   try {
     const { date } = req.query;
@@ -97,21 +89,24 @@ const getRosterByDate = async (req, res, next) => {
 
     const selectedDate = new Date(date);
     selectedDate.setHours(0, 0, 0, 0);
-
     const roster = await DailyRoster.findOne({ date: selectedDate })
-      .populate({
-        path: "items.id",
-        select: "name basePrice images subCategory isVeg isJain",
-        populate: {
-          path: "subCategory",
-          select: "name category",
-          populate: {
-            path: "category",
-            select: "name",
-          },
-        },
-      })
-      .lean();
+  .populate({
+    path: "items.id",
+    select: "name basePrice images subCategory isVeg isJain isAvailable isDeleted",
+    match: {
+      isDeleted: false,
+      isAvailable: true,
+    },
+    populate: {
+      path: "subCategory",
+      select: "name category",
+      populate: {
+        path: "category",
+        select: "name",
+      },
+    },
+  })
+  .lean();
 
     return res.status(200).json({
       success: true,
@@ -122,10 +117,6 @@ const getRosterByDate = async (req, res, next) => {
   }
 };
 
-/**
- * @desc    Get Roster Range
- * @route   GET /api/v1/admin/roster/range
- */
 const getRosterRange = async (req, res, next) => {
   try {
     const { start, end } = req.query;

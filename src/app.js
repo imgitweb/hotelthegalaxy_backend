@@ -150,7 +150,7 @@ app.use("/api/v1/dining/offers", offerRoutepublic);
 app.use("/api/v1/admin/dashboard", dashboardRoutes);
 app.use("/api/v1/admin/riders", riderRoutes);
 app.use("/api/v1/admin/staff", staffRoutes);
-app.use("/api/v1/payment", paymentRoutes);
+app.use("/api/v1/payment" ,paymentRoutes);
 app.use("/api/v1/rooms", roomRoutes);
 
 app.use(
