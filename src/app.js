@@ -51,6 +51,7 @@ const allowedOrigins = [
   "http://localhost:3000",
   "http://localhost:3002",
   "http://localhost:5173",
+  "http://localhost:5173",
   "http://127.0.0.1:3000",
   process.env.CLIENT_URL,
   "https://uat.hotelthegalaxy.in",
@@ -72,10 +73,17 @@ const corsOptions = {
 
 // Use CORS for all routes
 app.use(cors(corsOptions));
-
 // 👈 FIX: Yahan String '/*' ki jagah Native RegExp /.*/ use kiya hai
 // Ye naye Express versions mein crash nahi hoga
-app.options(/.*/, cors(corsOptions));
+// app.options(/.*/, cors(corsOptions));
+
+
+
+app.post(
+  "/api/v1/payment/webhook",
+  express.raw({ type: "application/json" }),
+  require("./controllers/paymentController").handleWebhook
+);
 
 
 // ========================================================
@@ -95,9 +103,10 @@ app.use(
 app.use(express.json({ limit: "10kb" }));
 app.use(express.urlencoded({ extended: false }));
 app.use(cookieParser());
-app.use(mongoSanitize());
-app.use(xss());
 app.use(compression());
+app.use("/api/chat", chatRoutes);
+
+
 
 // ========================================================
 // 4. LOGGERS
@@ -142,9 +151,8 @@ app.use("/api/v1/reviews", reviewRoutes);
 app.use("/api/v1/dining", combsRoute);
 
 app.use("/api/v1/settings", settingRoutes);
-
 app.use("/webhook", whatsappRoutes);
-app.use("/api", chatRoutes);
+// app.use("/api/chat", chatRoutes);
 
 app.use("/api/v1/dining/offers", offerRoutepublic);
 app.use("/api/v1/admin/dashboard", dashboardRoutes);
@@ -164,5 +172,6 @@ app.use("/api/geocode", require("./routes/geocodeRoutes"));
 // ========================================================
 app.use(notFound);
 app.use(errorHandler);
-
+app.use(mongoSanitize());
+app.use(xss());
 module.exports = app;

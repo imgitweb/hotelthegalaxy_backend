@@ -3,6 +3,7 @@ const crypto = require("crypto");
 const Order = require("../models/User/ordersModel");
 const Payment = require("../models/paymentModel");
 const Address = require("../models/User/address");
+const {sendTextMessage} = require("../langraph/services/whatsappService")
 
 exports.createOrder = async (req, res, next) => {
   try {
@@ -248,89 +249,212 @@ exports.handleCancel = async (req, res, next) => {
   }
 };
 
+exports.handleWebhook = async (req, res) => {
+  console.log("🔥 WEBHOOK ROUTE HIT!"); 
 
-
-
-exports.handleWebhook = async (req, res, next) => {
   try {
     const webhookSignature = req.headers['x-razorpay-signature'];
-    
-    // Secret ko environment variable mein rakhna best practice hai
-    // .env file mein RAZORPAY_WEBHOOK_SECRET=qwertyuiop123 add karein
-    const WEBHOOK_SECRET = 'qwertyuiop123';
+    const WEBHOOK_SECRET = process.env.RAZORPAY_WEBHOOK_SECRET || 'qwertyuiop123'; // Apni .env se match karna
 
-    // 1. Validate Signature
-    const isValid = validateWebhookSignature(
-      JSON.stringify(req.body),
-      webhookSignature,
-      WEBHOOK_SECRET
-    );
+    const rawBody = req.body.toString('utf8');
 
-    if (!isValid) {
+    const expectedSignature = crypto
+      .createHmac("sha256", WEBHOOK_SECRET)
+      .update(rawBody)
+      .digest("hex");
+
+    if (expectedSignature !== webhookSignature) {
       console.log('❌ Invalid webhook signature!');
       return res.status(400).json({ error: 'Invalid signature' });
     }
 
-    console.log('✅ Webhook verified successfully!');
+    console.log('✅ Webhook Signature verified successfully!');
 
-    const eventType = req.body.event;
+    const payload = JSON.parse(rawBody);
+    const eventType = payload.event;
     
-    // Razorpay ki taraf se bheja gaya data
-    const paymentData = req.body.payload.payment.entity; 
-    const razorpayOrderId = paymentData.order_id; // Yeh hamare DB se link karne ke kaam aayega
+    // Razorpay ki taraf se bheja gaya entity data
+    const paymentData = payload.payload.payment.entity; 
 
-    // 2. Handle Events
-    if (eventType === 'payment.captured') {
-      console.log(`Payment captured via Webhook for order: ${razorpayOrderId}`);
+    // 🔥 MAIN FIX: Razorpay Order ID ki jagah hum apne notes se dbOrderId nikalenge
+    const dbOrderId = paymentData.notes ? paymentData.notes.dbOrderId : null;
+
+    if (!dbOrderId) {
+      console.log("⚠️ Webhook received but no dbOrderId found in notes. Skipping.");
+      return res.status(200).json({ status: 'ok' });
+    }
+
+    // 4. Handle Events
+    if (eventType === 'payment.captured' || eventType === 'payment_link.paid') {
+      console.log(`💰 Payment captured for MongoDB Order: ${dbOrderId}`);
       
-      // Database mein Payment dhundhein
-      const payment = await Payment.findOne({ razorpayOrderId: razorpayOrderId });
+      // 🔥 Yahan hum apne database ID se payment find kar rahe hain
+      const payment = await Payment.findOne({ order: dbOrderId });
 
-      if (payment && !payment.isCaptured) {
-        // Payment table update karein
-        await Payment.findOneAndUpdate(
-          { razorpayOrderId: razorpayOrderId },
-          {
-            razorpayPaymentId: paymentData.id,
-            paymentMethod: paymentData.method || "unknown",
-            razorpayStatus: paymentData.status,
-            status: "captured",
-            isCaptured: true,
-          }
-        );
-
-        // Order table update karein (Aapke schema ke hisaab se keys adjust kar lein)
-        await Order.findByIdAndUpdate(payment.orderId, {
-          paymentStatus: "paid", // Ya "payment.status": "paid" (jaise verifyPayment mein hai)
+      if (payment && payment.status !== "SUCCESS") { 
+        // 1. Update Payment Table
+        await Payment.findByIdAndUpdate(payment._id, {
+          status: "SUCCESS",
+          transactionId: paymentData.id,
+          "metadata.razorpayPaymentId": paymentData.id,
+          "metadata.paymentMethod": paymentData.method || "unknown",
+          "metadata.razorpayStatus": paymentData.status,
         });
+
+        // 2. Update Order Table (🔥 Yahan { new: true } lagaya taaki updated data return ho)
+        const updatedOrder = await Order.findByIdAndUpdate(dbOrderId, {
+          "payment.status": "paid", 
+          "payment.transactionId": paymentData.id,
+          "payment.method": paymentData.method || "razorpay",
+          status: "confirmed",
+          "timeline.confirmedAt": new Date(),
+        }, { new: true }); 
+        
+        console.log(`✅ DATABASE UPDATED: Order ${dbOrderId} is now PAID!`);
+
+        // 🔥 3. WHATSAPP MESSAGE LOGIC 🔥
+        if (updatedOrder) {
+            // Notes se ya DB se phone number nikalo
+            let userPhone = paymentData.notes?.phone || updatedOrder.address?.phone;
+            
+            if (userPhone) {
+                // WhatsApp API format ke hisaab se number ko format karna (Sirf numbers, aur 10 digit pe 91)
+                userPhone = userPhone.toString().replace(/\D/g, ''); 
+                if (userPhone.length === 10) {
+                    userPhone = "91" + userPhone; 
+                }
+
+                const orderNumber = updatedOrder.orderNumber || updatedOrder._id;
+                
+                // Message ka format
+                const successMsg = `🎉 *Payment Successful!*\n\nNamaste! Aapka order *${orderNumber}* confirm ho gaya hai.\n💰 Amount Paid: ₹${updatedOrder.totalAmount}\n\n👨‍🍳 Our grand chefs are now preparing your delicious meal. Hum jald hi ise dispatch karenge!`;
+                
+                // WhatsApp message function call
+                await sendTextMessage(userPhone, successMsg);
+            } else {
+                console.log("⚠️ Phone number nahi mila, WhatsApp message nahi bheja.");
+            }
+        }
+
+      } else {
+        console.log(`ℹ️ Payment already marked as SUCCESS or not found.`);
       }
     } 
     else if (eventType === 'payment.failed') {
-      console.log(`Payment failed via Webhook for order: ${razorpayOrderId}`);
+      console.log(`❌ Payment failed for MongoDB Order: ${dbOrderId}`);
       
-      const payment = await Payment.findOne({ razorpayOrderId: razorpayOrderId });
+      const payment = await Payment.findOne({ order: dbOrderId });
 
       if (payment) {
-        await Payment.findOneAndUpdate(
-          { razorpayOrderId: razorpayOrderId },
-          {
-            status: "failed",
-            failureReason: paymentData.error_description || "Payment failed via webhook",
-          }
-        );
+        await Payment.findByIdAndUpdate(payment._id, {
+          status: "FAILED",
+          "metadata.failureReason": paymentData.error_description || "Webhook reported failure",
+        });
 
-        await Order.findByIdAndUpdate(payment.orderId, {
-          paymentStatus: "failed",
+        await Order.findByIdAndUpdate(dbOrderId, {
+          "payment.status": "failed",
         });
       }
     }
 
-    // 3. Razorpay ko Success Response bhejna ZAROORI hai
+    // 5. Success Response
     return res.status(200).json({ status: 'ok' });
 
   } catch (error) {
     console.error('Webhook processing error:', error);
-    // Error aane par bhi Razorpay ko 500 bhejte hain taaki wo baad mein retry kare
     return res.status(500).json({ error: 'Internal server error' }); 
   }
 };
+
+
+// exports.handleWebhook = async (req, res) => {
+//   console.log("🔥 WEBHOOK ROUTE HIT!"); 
+
+//   try {
+//     const webhookSignature = req.headers['x-razorpay-signature'];
+//     const WEBHOOK_SECRET = process.env.RAZORPAY_WEBHOOK_SECRET || 'qwertyuiop123'; // Apni .env se match karna
+
+//     const rawBody = req.body.toString('utf8');
+
+//     const expectedSignature = crypto
+//       .createHmac("sha256", WEBHOOK_SECRET)
+//       .update(rawBody)
+//       .digest("hex");
+
+//     if (expectedSignature !== webhookSignature) {
+//       console.log('❌ Invalid webhook signature!');
+//       return res.status(400).json({ error: 'Invalid signature' });
+//     }
+
+//     console.log('✅ Webhook Signature verified successfully!');
+
+//     const payload = JSON.parse(rawBody);
+//     const eventType = payload.event;
+    
+//     // Razorpay ki taraf se bheja gaya entity data
+//     const paymentData = payload.payload.payment.entity; 
+
+//     // 🔥 MAIN FIX: Razorpay Order ID ki jagah hum apne notes se dbOrderId nikalenge
+//     const dbOrderId = paymentData.notes ? paymentData.notes.dbOrderId : null;
+
+//     if (!dbOrderId) {
+//       console.log("⚠️ Webhook received but no dbOrderId found in notes. Skipping.");
+//       return res.status(200).json({ status: 'ok' });
+//     }
+
+//     // 4. Handle Events
+//     if (eventType === 'payment.captured' || eventType === 'payment_link.paid') {
+//       console.log(`💰 Payment captured for MongoDB Order: ${dbOrderId}`);
+      
+//       // 🔥 Yahan hum apne database ID se payment find kar rahe hain
+//       const payment = await Payment.findOne({ order: dbOrderId });
+
+//       if (payment && payment.status !== "SUCCESS") { 
+//         // 1. Update Payment Table
+//         await Payment.findByIdAndUpdate(payment._id, {
+//           status: "SUCCESS",
+//           transactionId: paymentData.id,
+//           "metadata.razorpayPaymentId": paymentData.id,
+//           "metadata.paymentMethod": paymentData.method || "unknown",
+//           "metadata.razorpayStatus": paymentData.status,
+//         });
+
+//         // 2. Update Order Table
+//         await Order.findByIdAndUpdate(dbOrderId, {
+//           "payment.status": "paid", 
+//           "payment.transactionId": paymentData.id,
+//           "payment.method": paymentData.method || "razorpay",
+//           status: "confirmed",
+//           "timeline.confirmedAt": new Date(),
+//         });
+        
+//         console.log(`✅ DATABASE UPDATED: Order ${dbOrderId} is now PAID!`);
+//       } else {
+//         console.log(`ℹ️ Payment already marked as SUCCESS or not found.`);
+//       }
+//     } 
+//     else if (eventType === 'payment.failed') {
+//       console.log(`❌ Payment failed for MongoDB Order: ${dbOrderId}`);
+      
+//       const payment = await Payment.findOne({ order: dbOrderId });
+
+//       if (payment) {
+//         await Payment.findByIdAndUpdate(payment._id, {
+//           status: "FAILED",
+//           "metadata.failureReason": paymentData.error_description || "Webhook reported failure",
+//         });
+
+//         await Order.findByIdAndUpdate(dbOrderId, {
+//           "payment.status": "failed",
+//         });
+//       }
+//     }
+
+//     // 5. Success Response
+//     return res.status(200).json({ status: 'ok' });
+
+//   } catch (error) {
+//     console.error('Webhook processing error:', error);
+//     return res.status(500).json({ error: 'Internal server error' }); 
+//   }
+// };

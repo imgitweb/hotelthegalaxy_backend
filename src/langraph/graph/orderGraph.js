@@ -1,37 +1,39 @@
+require("dotenv").config();
 const { StateGraph } = require("@langchain/langgraph");
 const { ChatOpenAI } = require("@langchain/openai");
 const { z } = require("zod");
 
 const {
-  getOrCreateUser, getOrCreateSession, getActiveOrder,
-  getCategories, getMenuByCategory, getUserAddresses,
-  saveNewAddress, addItemsToCart, placeOrder, getUserOrderStats,
-  cancelOrder, removeItemsFromCart, 
+  checkUserExists, registerNewUser, getOrCreateSession, getActiveOrder,
+  getCategories, getMenuByCategory, getUserAddresses, getUserOrderStats,
+  saveNewAddress, addItemsToCart, placeOrder, cancelOrder, removeItemsFromCart, 
   processBotOrderAndPayment, checkLatestPaymentStatus
 } = require("../tools/orderTools");
 
-// 🔥 MEMORY OBJECTS 🔥
 const userContextMemory = {}; 
 const paymentAttemptsMemory = {}; 
 
-// ---------------- 1. AI AGENT SETUP ---------------- //
-const llm = new ChatOpenAI({ modelName: "gpt-4o-mini", temperature: 0 });
+const llm = new ChatOpenAI({ 
+  openAIApiKey: process.env.OPENAI_API_KEY, 
+  modelName: "gpt-4o-mini", 
+  temperature: 0 
+});
 
 const IntentSchema = z.object({
   intent: z.enum([
     "GREETING", "SHOW_MENU", "SHOW_CATEGORY_ITEMS", "ADD_TO_CART", "REMOVE_FROM_CART", 
-    "CHECKOUT", "PROVIDE_ADDRESS", "SELECT_SAVED_ADDRESS", 
+    "CHECKOUT", "PROVIDE_ADDRESS", "SELECT_SAVED_ADDRESS", "PROVIDE_NAME", // 🔥 Added PROVIDE_NAME
     "INITIATE_RAZORPAY_PAYMENT", "COMPLETE_ORDER", "TRACK_ORDER", "ORDER_STATS", "CANCEL_ORDER", "HELP", "UNKNOWN"
   ]).describe("Identify the core intent based on user input and the previous bot message context."),
   
   category_index: z.number().nullable(),
   category_name: z.string().nullable(),
+  user_name: z.string().nullable().describe("Extract the user's name if they are providing it."), // 🔥 Added user_name
   extracted_items: z.array(z.object({
     name: z.string(),
     quantity: z.number()
   })),
   
-  // 🔥 UPDATED ADDRESS SCHEMA 🔥
   address: z.object({
     area: z.string().describe("Extract the main street, area, or flat details (e.g. '007, 8th floor bansal one')"),
     landmark: z.string().describe("Extract the landmark if provided (e.g. 'db mall'). If not provided, return 'Not provided'.")
@@ -42,7 +44,6 @@ const IntentSchema = z.object({
 
 const aiBrain = llm.withStructuredOutput(IntentSchema, { strict: true });
 
-// ---------------- 2. THE BRAIN NODE ---------------- //
 async function agentDecisionNode(state) {
   const msg = (state.inputText || "").trim().toLowerCase();
   const phone = state.phone;
@@ -55,6 +56,10 @@ async function agentDecisionNode(state) {
     if (msg === "1" || msg.includes("menu")) return { ...state, aiIntent: "SHOW_MENU", aiData: {} };
     if (msg === "2" || msg.includes("track")) return { ...state, aiIntent: "TRACK_ORDER", aiData: {} };
     if (msg === "3" || msg.includes("help")) return { ...state, aiIntent: "HELP", aiData: {} };
+  }
+
+  if (msg.includes("stats") || msg.includes("history") || msg.includes("kitne ka order") || msg.includes("purane order")) {
+    return { ...state, aiIntent: "ORDER_STATS", aiData: {} };
   }
 
   if (previousBotMessage.includes("Our Menu Categories")) {
@@ -73,9 +78,8 @@ async function agentDecisionNode(state) {
   }
 
   if (["hi", "hello", "start", "home"].includes(msg)) return { ...state, aiIntent: "GREETING", aiData: {} };
-  if (["checkout", "pay", "done"].includes(msg)) return { ...state, aiIntent: "CHECKOUT", aiData: {} };
+  if (["checkout", "pay", "done", "paid"].includes(msg)) return { ...state, aiIntent: "COMPLETE_ORDER", aiData: {} }; 
 
-  // 🔥 AI DECISION ENGINE 🔥
   const prompt = `
     You are an intelligent order routing AI for the "Royal Hotel". 
     Read the 'BOT_LAST_MESSAGE' and the 'USER_REPLY'. Compare them to understand what the user wants to do.
@@ -88,6 +92,8 @@ async function agentDecisionNode(state) {
     1. ADD/REMOVE ITEMS: If user types food names -> intent "ADD_TO_CART". If "remove" -> intent "REMOVE_FROM_CART".
     2. NEW ADDRESS: If BOT_LAST_MESSAGE asks for a new address and USER_REPLY contains text like "Area: xyz" or "Landmark: abc" OR any long physical address string -> Intent is "PROVIDE_ADDRESS". Extract the 'area' and 'landmark'.
     3. COMPLETE ORDER: If BOT_LAST_MESSAGE gave a Razorpay payment link and asked to reply "Paid" -> USER_REPLY "paid", "done", "yes" = "COMPLETE_ORDER".
+    4. ONBOARDING: If BOT_LAST_MESSAGE asks for the user's name -> intent "PROVIDE_NAME". Extract their name into 'user_name'.
+    5. ORDER STATS: If user asks about their "history", "stats", "total spent" -> intent "ORDER_STATS".
   `;
 
   try {
@@ -99,34 +105,72 @@ async function agentDecisionNode(state) {
   }
 }
 
-// ---------------- 3. THE HANDS NODE (Execution) ---------------- //
 async function actionExecutionNode(state) {
   const { aiIntent, aiData, phone, inputText } = state;
-  const user = await getOrCreateUser(phone);
+  
+  // 🔥 1. CHECK IF USER EXISTS
+  let user = await checkUserExists(phone);
+
+  // 🛑 2. ONBOARDING INTERCEPTOR (Agar naya user hai aur wo apna naam nahi bata raha)
+  if (!user && aiIntent !== "PROVIDE_NAME") {
+    let replyText = "👑 *Welcome to Royal Hotel!*\n\nIt is an absolute honor to receive you. As this is your first visit, may I humbly know your good name so I can address you properly?";
+    userContextMemory[phone] = replyText;
+    return { ...state, replyText };
+  }
+
+  // Ab yahan se session chalega
   const session = await getOrCreateSession(phone); 
   let replyText = "";
 
   switch (aiIntent) {
+    
+    // 🔥 3. NEW USER PROVIDES NAME
+    case "PROVIDE_NAME": {
+      const extractedName = aiData?.user_name || inputText.trim() || "Guest";
+      
+      // Database me officially register karo
+      if (!user) {
+         user = await registerNewUser(phone, extractedName);
+      }
+      
+      replyText = `Splendid to meet you, *${user.fullName}*! 👑\n\nHow may I humbly serve you today, esteemed guest?\n\nReply with a number:\n*1.* 🍔 Order a Feast (Menu)\n*3.* ℹ️ Seek My Assistance (Help)`;
+      break;
+    }
+
     case "GREETING": {
       const hasActiveOrder = await getActiveOrder(user._id);
-      replyText = `👑 *Welcome to Royal Hotel*\n\nHow may I humbly serve you today, esteemed guest?\n\nReply with a number:\n*1.* 🍔 Order a Feast (Menu)`;
+      // 🔥 Ab personalized greeting jayegi
+      replyText = `👑 *Welcome back, ${user.fullName}!*\n\nHow may I humbly serve you today?\n\nReply with a number:\n*1.* 🍔 Order a Feast (Menu)`;
       if (hasActiveOrder) replyText += `\n*2.* 📦 Track Your Royal Order`;
-      replyText += `\n*3.* ℹ️ Seek My Assistance (Help)`;
+      replyText += `\n*3.* ℹ️ Seek My Assistance (Help)\n\n*(Type "Stats" to view your royal history)*`;
       break;
     }
 
     case "TRACK_ORDER": {
       const orderToTrack = await getActiveOrder(user._id);
       if (orderToTrack) {
-        replyText = `📦 *Your Active Order*\n\n🔖 Order ID: ${orderToTrack.orderNumber || orderToTrack._id}\n📊 Status: *${orderToTrack.status ? orderToTrack.status.toUpperCase() : "PROCESSING"}*\n💰 Amount: ₹${orderToTrack.totalAmount || orderToTrack.pricing?.total || 0}`;
+        const orderStatus = orderToTrack.status ? orderToTrack.status.toLowerCase() : "processing";
+        const amount = orderToTrack.totalAmount || orderToTrack.pricing?.total || 0;
+        
+        replyText = `📦 *Your Active Order*\n\n🔖 Order ID: ${orderToTrack.orderNumber || orderToTrack._id}\n📊 Status: *${orderStatus.toUpperCase()}*\n💰 Amount: ₹${amount.toFixed(2)}`;
+        
         if (orderToTrack.deliveryBoy && orderToTrack.deliveryBoy.phone) {
           replyText += `\n\n🛵 *Your Chariot Arrives:*\nRider: ${orderToTrack.deliveryBoy.name || "Executive"}\n📞 Contact: ${orderToTrack.deliveryBoy.phone}`;
         } else {
           replyText += `\n\n👨‍🍳 Our royal chefs are presently crafting your meal.`;
         }
-        replyText += `\n\nReply with:\n*1.* 🍔 Order More Delights\n*2.* ❌ Cancel Order`;
+
+        replyText += `\n\nWhat would you like to do?\n*1.* 🍔 Order More Delights`;
+
+        const uncancelableStatuses = ["confirmed", "preparing", "dispatched", "out_for_delivery", "delivered"];
+        
+        if (!uncancelableStatuses.includes(orderStatus)) {
+            replyText += `\n*2.* ❌ Cancel Order`;
+        } else {
+            replyText += `\n\n*(Note: Your order is already ${orderStatus.toUpperCase()}, so it cannot be cancelled now)*`;
+        }
       } else {
-        replyText = "Forgive me, my lord, but I do not see any active orders for you at this moment.\n\nReply *1* to browse the royal menu.";
+        replyText = "Forgive me, my lord, but I do not see any active orders for you at this moment.\n\nReply *1* to browse the royal menu, or type *Stats* to see your order history.";
       }
       break;
     }
@@ -136,16 +180,19 @@ async function actionExecutionNode(state) {
       if (cancelledOrder) {
         replyText = `✅ *Order Cancelled Successfully*\n\nAs you command, your order has been halted.\n\nReply *1* whenever you wish to order again.`;
       } else {
-        replyText = `❌ *Cannot Cancel Order*\n\nI humbly apologize, but you either have no active order, or it has progressed too far to be cancelled now.\n\nReply *1* to browse the menu.`;
+        replyText = `❌ *Cannot Cancel Order*\n\nI humbly apologize, but you either have no active order, or it has been confirmed and progressed too far to be cancelled now.\n\nReply *1* to browse the menu.`;
       }
       break;
     }
 
     case "ORDER_STATS": {
       const stats = await getUserOrderStats(user._id);
-      replyText = stats.totalOrders > 0 
-        ? `📊 *Your Royal History*\n\n🛍️ Feasts Enjoyed: *${stats.totalOrders}*\n💵 Treasure Spent: *₹${stats.totalSpent.toFixed(2)}*\n\nReply *1* to Order More.`
-        : "You have not yet graced us with an order, my lord.\n\nReply *1* to explore our feasts.";
+      
+      if (stats && stats.totalOrders > 0) {
+        replyText = `📜 *Your Royal History, ${user.fullName}*\n\n🛍️ Total Orders Placed: *${stats.totalOrders}*\n✅ Successfully Delivered: *${stats.deliveredOrders}*\n❌ Cancelled Orders: *${stats.cancelledOrders}*\n\n💎 Total Treasure Spent: *₹${stats.totalSpent.toFixed(2)}*\n\nReply *1* whenever you wish to order again!`;
+      } else {
+        replyText = "You have not yet graced us with a completed order, my lord.\n\nReply *1* to explore our feasts and begin your royal journey.";
+      }
       break;
     }
 
@@ -218,7 +265,6 @@ async function actionExecutionNode(state) {
       break;
     }
 
-    // 🔥 UPDATED CHECKOUT TO SHOW ADDRESS FORMAT EXAMPLE 🔥
     case "CHECKOUT": {
       const addresses = await getUserAddresses(user._id);
       
@@ -237,7 +283,6 @@ async function actionExecutionNode(state) {
         addressPrompt += "👉 *Please provide your delivery address in this exact format:*\n\n";
       }
 
-      // Add the visual example
       addressPrompt += `Area: 007, 8th floor bansal one\nLandmark: db mall`;
       
       replyText = addressPrompt;
@@ -263,7 +308,7 @@ async function actionExecutionNode(state) {
 
          if (paymentData.success) {
            paymentAttemptsMemory[phone] = 0; 
-           replyText = `✅ Address confirmed: ${savedAddresses[index].street}\n\n💳 *Online Royal Treasury*\nGrand Total: *₹${paymentData.totalAmount.toFixed(2)}*\n\n👉 Please pay securely via Razorpay:\n🔗 ${paymentData.paymentUrl}\n\n*Once payment is successful, please reply with "Paid".*`;
+           replyText = `✅ Address confirmed: ${savedAddresses[index].street}\n\n💳 *Online Royal Treasury*\nGrand Total: *₹${paymentData.totalAmount.toFixed(2)}*\n\n👉 Please pay securely via Razorpay:\n🔗 ${paymentData.paymentUrl}\n\n*Aapka order auto-confirm ho jayega payment successful hote hi!*`;
            session.cart = []; 
            await session.save();
          } else {
@@ -275,12 +320,9 @@ async function actionExecutionNode(state) {
       break;
     }
 
-    // 🔥 UPDATED PROVIDE_ADDRESS 🔥
     case "PROVIDE_ADDRESS": {
-      // AI automatically extracts area and landmark using the updated Zod schema
       const extractedAddress = aiData?.address || { area: inputText, landmark: "Not provided" };
       
-      // Save it to database
       const newAddr = await saveNewAddress(user._id, extractedAddress);
       session.addressId = newAddr._id;
       await session.save();
@@ -291,13 +333,12 @@ async function actionExecutionNode(state) {
          break;
       }
 
-      // Proceed to Payment
       const paymentData = await processBotOrderAndPayment(user._id, phone, cartItems, newAddr._id);
 
       if (paymentData.success) {
         paymentAttemptsMemory[phone] = 0; 
         const displayLandmark = newAddr.landmark ? `, near ${newAddr.landmark}` : "";
-        replyText = `✅ New address saved: ${newAddr.street}${displayLandmark}\n\n💳 *Online Royal Treasury*\nGrand Total: *₹${paymentData.totalAmount.toFixed(2)}*\n\n👉 Please pay securely via Razorpay:\n🔗 ${paymentData.paymentUrl}\n\n*Once payment is successful, please reply with "Paid".*`;
+        replyText = `✅ New address saved: ${newAddr.street}${displayLandmark}\n\n💳 *Online Royal Treasury*\nGrand Total: *₹${paymentData.totalAmount.toFixed(2)}*\n\n👉 Please pay securely via Razorpay:\n🔗 ${paymentData.paymentUrl}\n\n*Aapka order auto-confirm ho jayega payment successful hote hi!*`;
         session.cart = []; 
         await session.save();
       } else {
@@ -326,7 +367,7 @@ async function actionExecutionNode(state) {
           paymentAttemptsMemory[phone] = 0; 
           replyText = `❌ *Order Cancelled*\n\nWe haven't received your payment after 3 attempts. Your order has been automatically cancelled for security reasons.\n\nReply *1* to browse the menu and order again.`;
         } else {
-          replyText = `⚠️ *Payment Not Received Yet*\n\nI just checked the royal treasury, but your payment hasn't reflected yet. *(Attempt ${attempts}/3)*\n\nPlease ensure you have paid using the Razorpay link provided. If you just paid, please wait a few seconds and reply "Paid" again.`;
+          replyText = `⚠️ *Payment Not Received Yet*\n\nI just checked the royal treasury, but your payment hasn't reflected yet. *(Attempt ${attempts}/3)*\n\nPlease ensure you have paid using the Razorpay link provided.`;
         }
       }
       break;
@@ -337,13 +378,10 @@ async function actionExecutionNode(state) {
     }
   }
 
-  // Update Context Memory
   userContextMemory[phone] = replyText;
-
   return { ...state, replyText }; 
 }
 
-/* ---------------- 4. BUILD GRAPH ---------------- */
 function buildOrderGraph() {
   const graph = new StateGraph({
     channels: {

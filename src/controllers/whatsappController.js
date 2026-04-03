@@ -1,5 +1,5 @@
 const { extractIncomingMessage } = require("../utils/whatsaap/parseWhatsApp");
-const runLangGraph = require("../langraph/services/langgraphService");
+const {runLangGraph} = require("../langraph/services/langgraphService");
 
 const verifyWebhook = (req, res) => {
 
@@ -28,6 +28,7 @@ const verifyWebhook = (req, res) => {
 
 const receiveMessage = async (req, res) => {
   try {
+    console.log(".................................................................... hit")
     // ✅ WhatsApp ko turant ACK
     res.sendStatus(200);
 

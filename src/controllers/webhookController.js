@@ -1,84 +1,89 @@
+const razorpay = require("../config/razorpay");
 const crypto = require("crypto");
 const Order = require("../models/User/ordersModel");
 const Payment = require("../models/paymentModel");
+const Address = require("../models/User/address");
 
-exports.handleWebhook = async (req, res) => {
+exports.handleWebhook = async (req, res, next) => {
   try {
-    const webhookSecret = process.env.RAZORPAY_WEBHOOK_SECRET;
-    const signature = req.headers["x-razorpay-signature"];
+    const webhookSignature = req.headers['x-razorpay-signature'];
+    
+    // Secret ko environment variable mein rakhna best practice hai
+    // .env file mein RAZORPAY_WEBHOOK_SECRET=qwertyuiop123 add karein
+    const WEBHOOK_SECRET = 'qwertyuiop123';
 
-    if (!signature) {
-      return res.status(400).json({ success: false, message: "No signature" });
+    // 1. Validate Signature
+    const isValid = validateWebhookSignature(
+      JSON.stringify(req.body),
+      webhookSignature,
+      WEBHOOK_SECRET
+    );
+
+    if (!isValid) {
+      console.log('❌ Invalid webhook signature!');
+      return res.status(400).json({ error: 'Invalid signature' });
     }
 
-    const expectedSig = crypto
-      .createHmac("sha256", webhookSecret)
-      .update(req.body)
-      .digest("hex");
+    console.log('✅ Webhook verified successfully!');
 
-    if (expectedSig !== signature) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid webhook signature",
-      });
-    }
+    const eventType = req.body.event;
+    
+    // Razorpay ki taraf se bheja gaya data
+    const paymentData = req.body.payload.payment.entity; 
+    const razorpayOrderId = paymentData.order_id; // Yeh hamare DB se link karne ke kaam aayega
 
-    const body = JSON.parse(req.body);
-    const event = body.event;
-    const payload = body.payload;
+    // 2. Handle Events
+    if (eventType === 'payment.captured') {
+      console.log(`Payment captured via Webhook for order: ${razorpayOrderId}`);
+      
+      // Database mein Payment dhundhein
+      const payment = await Payment.findOne({ razorpayOrderId: razorpayOrderId });
 
-    if (event === "payment.captured") {
-      const rzpPaymentId = payload.payment.entity.id;
-      const rzpOrderId = payload.payment.entity.order_id;
-      const method = payload.payment.entity.method;
+      if (payment && !payment.isCaptured) {
+        // Payment table update karein
+        await Payment.findOneAndUpdate(
+          { razorpayOrderId: razorpayOrderId },
+          {
+            razorpayPaymentId: paymentData.id,
+            paymentMethod: paymentData.method || "unknown",
+            razorpayStatus: paymentData.status,
+            status: "captured",
+            isCaptured: true,
+          }
+        );
 
-      const payment = await Payment.findOne({
-        "metadata.razorpayOrderId": rzpOrderId,
-      });
-
-      if (!payment) return res.status(200).json({ received: true });
-
-      if (payment.status !== "SUCCESS") {
-        await Payment.findByIdAndUpdate(payment._id, {
-          status: "SUCCESS",
-          transactionId: rzpPaymentId,
-          "metadata.razorpayPaymentId": rzpPaymentId,
-          "metadata.paymentMethod": method,
+        // Order table update karein (Aapke schema ke hisaab se keys adjust kar lein)
+        await Order.findByIdAndUpdate(payment.orderId, {
+          paymentStatus: "paid", // Ya "payment.status": "paid" (jaise verifyPayment mein hai)
         });
+      }
+    } 
+    else if (eventType === 'payment.failed') {
+      console.log(`Payment failed via Webhook for order: ${razorpayOrderId}`);
+      
+      const payment = await Payment.findOne({ razorpayOrderId: razorpayOrderId });
 
-        await Order.findByIdAndUpdate(payment.order, {
-          "payment.status": "paid",
-          "payment.transactionId": rzpPaymentId,
-          "payment.method": method,
-          status: "confirmed",
-          "timeline.confirmedAt": new Date(),
+      if (payment) {
+        await Payment.findOneAndUpdate(
+          { razorpayOrderId: razorpayOrderId },
+          {
+            status: "failed",
+            failureReason: paymentData.error_description || "Payment failed via webhook",
+          }
+        );
+
+        await Order.findByIdAndUpdate(payment.orderId, {
+          paymentStatus: "failed",
         });
       }
     }
 
-    if (event === "payment.failed") {
-      const rzpOrderId = payload.payment.entity.order_id;
-      const errorDesc = payload.payment.entity.error_description;
+    // 3. Razorpay ko Success Response bhejna ZAROORI hai
+    return res.status(200).json({ status: 'ok' });
 
-      const payment = await Payment.findOne({
-        "metadata.razorpayOrderId": rzpOrderId,
-      });
-
-      if (payment && payment.status === "PENDING") {
-        await Payment.findByIdAndUpdate(payment._id, {
-          status: "FAILED",
-          "metadata.failureReason": errorDesc,
-        });
-
-        await Order.findByIdAndUpdate(payment.order, {
-          "payment.status": "failed",
-        });
-      }
-    }
-
-    res.status(200).json({ received: true });
-  } catch (err) {
-    console.error("Webhook error:", err.message);
-    res.status(200).json({ received: true });
+  } catch (error) {
+    console.error('Webhook processing error:', error);
+    // Error aane par bhi Razorpay ko 500 bhejte hain taaki wo baad mein retry kare
+    return res.status(500).json({ error: 'Internal server error' }); 
   }
 };

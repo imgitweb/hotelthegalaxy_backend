@@ -9,20 +9,20 @@ const Offer = require("../../models/Offer");
 const razorpay = require("../../config/razorpay"); 
 const mongoose = require("mongoose");
 
-// 🔥 NEW: Check if user exists
-async function checkUserExists(phone) {
-  return await User.findOne({ phone });
-}
 
-// 🔥 NEW: Register user with exact schema requirements
-async function registerNewUser(phone, fullName) {
-  return await User.create({ 
-    phone, 
-    role: "customer", 
-    fullName: fullName || "Guest",
-    authProvider: "whatsapp",
-    isActive: true
-  });
+async function getOrCreateUser(phone) {
+  let user = await User.findOne({ phone });
+  
+  if (!user) {
+    // Yahan 'fullName' add kar diya gaya hai taaki validation fail na ho
+    user = await User.create({ 
+      phone, 
+      role: "customer", 
+      fullName: "Guest" // <-- YEH LINE ADD KARNI HAI
+    });
+  }
+  
+  return user;
 }
 
 // 2. Session Management
@@ -45,6 +45,8 @@ async function getCategories() {
   return await Category.find({ isActive: true }).lean();
 }
 
+
+
 // 5. Fetch Items by Category
 async function getMenuByCategory(categoryId) {
   return await MenuItem.find({ category: categoryId, isAvailable: true }).lean();
@@ -53,17 +55,24 @@ async function getMenuByCategory(categoryId) {
 // 6. Address Management
 async function getUserAddresses(userId) {
   return await Address.find({ user: userId })
-    .select("_id street landmark label")
+    .select("_id street landmark label")  // ✅ _id add karo
     .sort({ isDefault: -1, createdAt: -1 })
     .lean();
 }
 
+
+// tools/orderTools.js
+
 async function saveNewAddress(userId, addressData) {
+  // Check if addressData is a valid object
   const isObject = typeof addressData === 'object' && addressData !== null;
+
+  // Safely extract values with fallbacks
   const area = isObject ? addressData.area : addressData;
   const landmark = (isObject && addressData.landmark) ? addressData.landmark : "Added via WhatsApp";
 
   try {
+    // 🔥 Address.create() ki jagah new Address() aur .save() use karna hai
     const newAddress = new Address({
       user: userId,
       street: area || "Unknown Area", 
@@ -73,35 +82,39 @@ async function saveNewAddress(userId, addressData) {
       lng: 77.4381391, 
       location: {
         type: "Point",
-        coordinates: [77.4381391, 23.2227988] 
+        coordinates: [77.4381391, 23.2227988] // Longitude pehle, phir Latitude
       }
     });
     
+    // Explicitly batana zaroori hai ki location field modified hai
     newAddress.markModified('location');
+    
     const savedAddress = await newAddress.save();
     return savedAddress;
+    
   } catch (error) {
     console.error("Error saving new address:", error);
     throw error;
   }
 }
 
-// 7. Cart Operations
+// 7. Cart Operations (Smart Addition with Price tracking)
 async function addItemsToCart(phone, items) {
   const session = await getOrCreateSession(phone);
   const menu = await MenuItem.find({ isAvailable: true });
 
   for (const it of items) {
     const name = String(it.name || "").toLowerCase();
+    // 🔥 Handles both 'qty' and 'quantity' gracefully
     const qty = Math.max(1, parseInt(it.quantity || it.qty || 1));
 
     const menuItem = menu.find((m) => m.name.toLowerCase().includes(name));
-    if (!menuItem) continue; 
+    if (!menuItem) continue; // Agar DB me item na mile toh skip karega
 
     const existing = session.cart.find((x) => String(x.menuItemId) === String(menuItem._id));
     
     if (existing) {
-      existing.quantity += qty; 
+      existing.quantity += qty; // Purani quantity me nayi quantity add hogi
       existing.total = existing.quantity * existing.price;
     } else {
       session.cart.push({
@@ -118,46 +131,60 @@ async function addItemsToCart(phone, items) {
   return session.cart;
 }
 
+
 async function removeItemsFromCart(phone, items) {
   const session = await getOrCreateSession(phone);
 
-  if (!session.cart || session.cart.length === 0) return session.cart; 
+  // Agar cart already khali hai, toh direct return kardo
+  if (!session.cart || session.cart.length === 0) {
+    return session.cart; 
+  }
 
   for (const it of items) {
     const name = String(it.name || "").toLowerCase().trim();
+    // 🔥 Handles 'qty' and 'quantity'. Defaults to removing 1 item if not specified.
     const qtyToRemove = Math.max(1, parseInt(it.quantity || it.qty || 1));
 
-    const existingIndex = session.cart.findIndex((x) => x.name.toLowerCase().includes(name));
+    // Cart me us item ko dhoondo
+    const existingIndex = session.cart.findIndex((x) => 
+      x.name.toLowerCase().includes(name)
+    );
 
     if (existingIndex !== -1) {
       const existingItem = session.cart[existingIndex];
+      
+      // Quantity kam karo
       existingItem.quantity -= qtyToRemove;
 
+      // Agar quantity 0 ya usse kam ho jaye, toh item ko cart se poora hata do
       if (existingItem.quantity <= 0) {
         session.cart.splice(existingIndex, 1);
       } else {
+        // Warna bachi hui quantity ke hisaab se total price update kardo
         existingItem.total = existingItem.quantity * existingItem.price;
       }
     }
   }
   
+  // Database me naya cart save karo
   await session.save();
   return session.cart;
 }
 
+
+
 async function placeOrder(phone, paymentMethod) {
-  let user = await checkUserExists(phone);
-  if (!user) user = await registerNewUser(phone, "Guest"); // Fallback
-  
+  const user = await getOrCreateUser(phone);
   const session = await getOrCreateSession(phone);
   
+  // 🔥 CRITICAL FIX: Fetch Address using session ID
   let selectedAddress = null;
   if (session.addressId) {
     selectedAddress = await Address.findById(session.addressId); 
   }
 
   const subtotal = session.cart.reduce((sum, item) => sum + item.total, 0);
-  const tax = subtotal * 0.05; 
+  const tax = subtotal * 0.05; // 5% GST
   const total = subtotal + tax;
   const orderNumber = `ORD-${Math.floor(100000 + Math.random() * 900000)}`;
 
@@ -167,8 +194,9 @@ async function placeOrder(phone, paymentMethod) {
     items: session.cart,
     pricing: { subtotal, tax, total },
     address: {
-      fullName: user.fullName || "WhatsApp User",
+      fullName: "WhatsApp User",
       phone: phone,
+      // 🔥 Yahan address ki details proper set honi chahiye
       street: selectedAddress ? selectedAddress.street : "Store Pickup",
       landmark: selectedAddress ? selectedAddress.landmark : "",
       city: "Default City", 
@@ -177,84 +205,84 @@ async function placeOrder(phone, paymentMethod) {
     status: "pending",
   });
 
+  // Clear Session Data after order
   session.step = "HOME";
   session.cart = [];
-  session.addressId = null; 
+  session.addressId = null; // Next order ke liye clear kar do
   await session.save();
 
   return newOrder;
 }
 
+
 async function cancelOrder(userId) {
+  // Check active order first
   const activeOrder = await getActiveOrder(userId);
   if (activeOrder && ["pending", "preparing", "accepted"].includes(activeOrder.status)) {
-    return await Order.findByIdAndUpdate(activeOrder._id, { status: "cancelled" }, { new: true });
+    // Update status to cancelled
+    const updated = await Order.findByIdAndUpdate(
+      activeOrder._id, 
+      { status: "cancelled" }, 
+      { new: true }
+    );
+    return updated;
   }
-  return null; 
+  return null; // Ager order nahi hai ya dispatch ho chuka hai
 }
 
-async function getUserOrderStats(userId) {
-  try {
-    const orders = await Order.find({ user: userId });
-    
-    let totalOrders = orders.length;
-    let deliveredOrders = 0;
-    let cancelledOrders = 0;
-    let totalSpent = 0;
 
-    orders.forEach(order => {
-        const status = order.status ? order.status.toLowerCase() : "";
-        if (status === "delivered") deliveredOrders++;
-        if (status === "cancelled") cancelledOrders++;
-        if (["confirmed", "preparing", "dispatched", "out_for_delivery", "delivered"].includes(status)) {
-            totalSpent += (order.totalAmount || order.pricing?.total || 0);
-        }
-    });
 
-    return { totalOrders, deliveredOrders, cancelledOrders, totalSpent };
-  } catch (error) {
-    console.error("Error fetching order stats:", error);
-    return { totalOrders: 0, deliveredOrders: 0, cancelledOrders: 0, totalSpent: 0 };
-  }
-}
+
+
+
 
 async function processBotOrderAndPayment(userId, phone, cartItems, addressId) {
   try {
-    const subtotal = cartItems.reduce((sum, item) => sum + item.total, 0);
-    const tax = subtotal * 0.05; 
-    const totalAmount = subtotal + tax;
+    // 1. Total amount calculate karo
+    let totalAmount = cartItems.reduce((sum, item) => sum + item.total, 0);
+    totalAmount = totalAmount + (totalAmount * 0.05); // 5% tax
 
+    // 🔥 2. Pura Address object fetch karo database se
     const fullAddress = await Address.findById(addressId);
-    if (!fullAddress) return { success: false };
+    if (!fullAddress) {
+       console.error("Address not found for Order creation");
+       return { success: false };
+    }
 
-    const uniqueOrderNumber = "ORD-" + Date.now() + "-" + Math.floor(Math.random() * 1000);
-
+    // 3. Database mein Order Save karo
     const newOrder = new Order({
-      orderNumber: uniqueOrderNumber, 
       user: userId,
       items: cartItems.map(item => ({ 
-        menuItem: item.menuItemId, 
         name: item.name, 
-        price: item.price || (item.total / item.quantity), 
+        price: item.price || item.total/item.quantity, 
         quantity: item.quantity, 
         total: item.total 
       })),
+      
+      // 🔥 YAHAN FIX HAI: ID ke bajaye poora address object pass karna hai kyunki schema waisa hai
       address: {
         street: fullAddress.street || "Unknown",
         landmark: fullAddress.landmark || "",
         label: fullAddress.label || "Home",
-        lat: fullAddress.lat || 0, 
-        lng: fullAddress.lng || 0, 
+        lat: fullAddress.lat || 0, // Fallback lat
+        lng: fullAddress.lng || 0, // Fallback lng
+        // Agar nested location object bhi required hai, to isse uncomment karein:
+        /* location: {
+             type: "Point",
+             coordinates: [fullAddress.lng || 0, fullAddress.lat || 0]
+           } 
+        */
       },
-      pricing: { subtotal: subtotal, tax: tax, total: totalAmount },
-      totalAmount: totalAmount, 
+      
       noContact: false,
       paymentStatus: "pending",
       orderStatus: "confirmed",
+      totalAmount: totalAmount,
     });
     
     const savedOrder = await newOrder.save();
 
+    // 4. Razorpay PAYMENT LINK create karo
     const paymentLinkReq = {
       amount: Math.round(totalAmount * 100), 
       currency: "INR",
@@ -264,17 +292,17 @@ async function processBotOrderAndPayment(userId, phone, cartItems, addressId) {
       notify: { sms: false, email: false },
       reminder_enable: true,
       reference_id: savedOrder._id.toString(), 
-      notes: { dbOrderId: savedOrder._id.toString(), phone: phone }
     };
     
     const paymentLink = await razorpay.paymentLink.create(paymentLinkReq);
 
+    // 5. Payment Database mein Save karo
     await Payment.create({
-      order: savedOrder._id,     
+      userId: userId,
+      orderId: savedOrder._id,
+      razorpayOrderId: paymentLink.id, 
       amount: totalAmount,
-      gateway: "RAZORPAY",
-      status: "created",         
-      metadata: { razorpayOrderId: paymentLink.id, userId: userId }
+      status: "created",
     });
 
     return {
@@ -289,15 +317,20 @@ async function processBotOrderAndPayment(userId, phone, cartItems, addressId) {
   }
 }
 
+
+
 async function checkLatestPaymentStatus(userId) {
   try {
+    // User ka sabse latest order nikalo
     const order = await Order.findOne({ user: userId }).sort({ createdAt: -1 });
     if (!order) return { found: false };
 
-    const payment = await Payment.findOne({ order: order._id });
+    // Us order se juda hua payment record nikalo
+    const payment = await Payment.findOne({ orderId: order._id });
     if (!payment) return { found: true, isPaid: false };
 
-    const isPaid = payment.status === "SUCCESS" || payment.isCaptured === true;
+    // Check karo ki database mein captured true hai kya
+    const isPaid = payment.status === "captured" || payment.isCaptured === true;
 
     return {
       found: true,
@@ -311,6 +344,8 @@ async function checkLatestPaymentStatus(userId) {
   }
 }
 
+
+
 async function getActiveOffers() {
   const now = new Date();
   try {
@@ -318,18 +353,16 @@ async function getActiveOffers() {
       isActive: true,
       startDate: { $lte: now },
       endDate: { $gte: now }
-    }).populate("items"); 
+    }).populate("items"); // Items populate karna zaroori hai taaki unka naam mil sake
     return offers;
   } catch (error) {
     console.error("Error fetching offers:", error);
     return [];
-  }
-}
 
-// 🔥 EXPORTS UPDATED
+  }}
+
 module.exports = {
-  checkUserExists, registerNewUser, getOrCreateSession, getActiveOrder, getActiveOffers,
-  getCategories, getMenuByCategory, getUserAddresses, getUserOrderStats,
-  saveNewAddress, addItemsToCart, placeOrder, cancelOrder, removeItemsFromCart, 
-  processBotOrderAndPayment, checkLatestPaymentStatus,
+  getOrCreateUser, getOrCreateSession, getActiveOrder,getActiveOffers,
+  getCategories, getMenuByCategory, getUserAddresses,
+  saveNewAddress, addItemsToCart, placeOrder,cancelOrder, removeItemsFromCart,processBotOrderAndPayment,checkLatestPaymentStatus,
 };

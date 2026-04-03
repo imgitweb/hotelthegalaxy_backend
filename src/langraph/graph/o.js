@@ -1,3 +1,4 @@
+require("dotenv").config(); // 🔥 FIX: Ensure environment variables are loaded
 const { StateGraph } = require("@langchain/langgraph");
 const { ChatOpenAI } = require("@langchain/openai");
 const { z } = require("zod");
@@ -10,12 +11,15 @@ const {
   processBotOrderAndPayment, checkLatestPaymentStatus
 } = require("../tools/orderTools");
 
-// 🔥 MEMORY OBJECTS 🔥
 const userContextMemory = {}; 
 const paymentAttemptsMemory = {}; 
 
-// ---------------- 1. AI AGENT SETUP ---------------- //
-const llm = new ChatOpenAI({ modelName: "gpt-4o-mini", temperature: 0 });
+// 🔥 FIX: Explicitly passing the API key to avoid missing credentials error
+const llm = new ChatOpenAI({ 
+  openAIApiKey: process.env.OPENAI_API_KEY, 
+  modelName: "gpt-4o-mini", 
+  temperature: 0 
+});
 
 const IntentSchema = z.object({
   intent: z.enum([
@@ -31,7 +35,6 @@ const IntentSchema = z.object({
     quantity: z.number()
   })),
   
-  // 🔥 UPDATED ADDRESS SCHEMA 🔥
   address: z.object({
     area: z.string().describe("Extract the main street, area, or flat details (e.g. '007, 8th floor bansal one')"),
     landmark: z.string().describe("Extract the landmark if provided (e.g. 'db mall'). If not provided, return 'Not provided'.")
@@ -42,7 +45,6 @@ const IntentSchema = z.object({
 
 const aiBrain = llm.withStructuredOutput(IntentSchema, { strict: true });
 
-// ---------------- 2. THE BRAIN NODE ---------------- //
 async function agentDecisionNode(state) {
   const msg = (state.inputText || "").trim().toLowerCase();
   const phone = state.phone;
@@ -50,8 +52,7 @@ async function agentDecisionNode(state) {
   const previousBotMessage = userContextMemory[phone] || "None";
   console.log(`🧐 Memory Context for ${phone}:`, previousBotMessage.substring(0, 60).replace(/\n/g, ' ') + "...");
 
-  // 🔥 FAST ROUTING
-  if (previousBotMessage.includes("Welcome to Hotel The Galaxy") || previousBotMessage.includes("How may I humbly serve you")) {
+  if (previousBotMessage.includes("Welcome to Royal Hotel") || previousBotMessage.includes("How may I humbly serve you")) {
     if (msg === "1" || msg.includes("menu")) return { ...state, aiIntent: "SHOW_MENU", aiData: {} };
     if (msg === "2" || msg.includes("track")) return { ...state, aiIntent: "TRACK_ORDER", aiData: {} };
     if (msg === "3" || msg.includes("help")) return { ...state, aiIntent: "HELP", aiData: {} };
@@ -73,9 +74,8 @@ async function agentDecisionNode(state) {
   }
 
   if (["hi", "hello", "start", "home"].includes(msg)) return { ...state, aiIntent: "GREETING", aiData: {} };
-  if (["checkout", "pay", "done"].includes(msg)) return { ...state, aiIntent: "CHECKOUT", aiData: {} };
+  if (["checkout", "pay", "done", "paid"].includes(msg)) return { ...state, aiIntent: "COMPLETE_ORDER", aiData: {} }; 
 
-  // 🔥 AI DECISION ENGINE 🔥
   const prompt = `
     You are an intelligent order routing AI for the "Royal Hotel". 
     Read the 'BOT_LAST_MESSAGE' and the 'USER_REPLY'. Compare them to understand what the user wants to do.
@@ -99,7 +99,6 @@ async function agentDecisionNode(state) {
   }
 }
 
-// ---------------- 3. THE HANDS NODE (Execution) ---------------- //
 async function actionExecutionNode(state) {
   const { aiIntent, aiData, phone, inputText } = state;
   const user = await getOrCreateUser(phone);
@@ -109,7 +108,7 @@ async function actionExecutionNode(state) {
   switch (aiIntent) {
     case "GREETING": {
       const hasActiveOrder = await getActiveOrder(user._id);
-      replyText = `👑 *Welcome to Hotel The Galaxy*\n\nHow may I humbly serve you today, esteemed guest?\n\nReply with a number:\n*1.* 🍔 Order a Feast (Menu)`;
+      replyText = `👑 *Welcome to Royal Hotel*\n\nHow may I humbly serve you today, esteemed guest?\n\nReply with a number:\n*1.* 🍔 Order a Feast (Menu)`;
       if (hasActiveOrder) replyText += `\n*2.* 📦 Track Your Royal Order`;
       replyText += `\n*3.* ℹ️ Seek My Assistance (Help)`;
       break;
@@ -142,10 +141,7 @@ async function actionExecutionNode(state) {
     }
 
     case "ORDER_STATS": {
-      const stats = await getUserOrderStats(user._id);
-      replyText = stats.totalOrders > 0 
-        ? `📊 *Your Royal History*\n\n🛍️ Feasts Enjoyed: *${stats.totalOrders}*\n💵 Treasure Spent: *₹${stats.totalSpent.toFixed(2)}*\n\nReply *1* to Order More.`
-        : "You have not yet graced us with an order, my lord.\n\nReply *1* to explore our feasts.";
+      replyText = "Order stats feature is coming soon! Reply *1* to explore our feasts.";
       break;
     }
 
@@ -218,7 +214,6 @@ async function actionExecutionNode(state) {
       break;
     }
 
-    // 🔥 UPDATED CHECKOUT TO SHOW ADDRESS FORMAT EXAMPLE 🔥
     case "CHECKOUT": {
       const addresses = await getUserAddresses(user._id);
       
@@ -237,7 +232,6 @@ async function actionExecutionNode(state) {
         addressPrompt += "👉 *Please provide your delivery address in this exact format:*\n\n";
       }
 
-      // Add the visual example
       addressPrompt += `Area: 007, 8th floor bansal one\nLandmark: db mall`;
       
       replyText = addressPrompt;
@@ -263,7 +257,7 @@ async function actionExecutionNode(state) {
 
          if (paymentData.success) {
            paymentAttemptsMemory[phone] = 0; 
-           replyText = `✅ Address confirmed: ${savedAddresses[index].street}\n\n💳 *Online Royal Treasury*\nGrand Total: *₹${paymentData.totalAmount.toFixed(2)}*\n\n👉 Please pay securely via Razorpay:\n🔗 ${paymentData.paymentUrl}\n\n*Once payment is successful, please reply with "Paid".*`;
+           replyText = `✅ Address confirmed: ${savedAddresses[index].street}\n\n💳 *Online Royal Treasury*\nGrand Total: *₹${paymentData.totalAmount.toFixed(2)}*\n\n👉 Please pay securely via Razorpay:\n🔗 ${paymentData.paymentUrl}\n\n*Aapka order auto-confirm ho jayega payment successful hote hi!*`;
            session.cart = []; 
            await session.save();
          } else {
@@ -275,12 +269,9 @@ async function actionExecutionNode(state) {
       break;
     }
 
-    // 🔥 UPDATED PROVIDE_ADDRESS 🔥
     case "PROVIDE_ADDRESS": {
-      // AI automatically extracts area and landmark using the updated Zod schema
       const extractedAddress = aiData?.address || { area: inputText, landmark: "Not provided" };
       
-      // Save it to database
       const newAddr = await saveNewAddress(user._id, extractedAddress);
       session.addressId = newAddr._id;
       await session.save();
@@ -291,13 +282,12 @@ async function actionExecutionNode(state) {
          break;
       }
 
-      // Proceed to Payment
       const paymentData = await processBotOrderAndPayment(user._id, phone, cartItems, newAddr._id);
 
       if (paymentData.success) {
         paymentAttemptsMemory[phone] = 0; 
         const displayLandmark = newAddr.landmark ? `, near ${newAddr.landmark}` : "";
-        replyText = `✅ New address saved: ${newAddr.street}${displayLandmark}\n\n💳 *Online Royal Treasury*\nGrand Total: *₹${paymentData.totalAmount.toFixed(2)}*\n\n👉 Please pay securely via Razorpay:\n🔗 ${paymentData.paymentUrl}\n\n*Once payment is successful, please reply with "Paid".*`;
+        replyText = `✅ New address saved: ${newAddr.street}${displayLandmark}\n\n💳 *Online Royal Treasury*\nGrand Total: *₹${paymentData.totalAmount.toFixed(2)}*\n\n👉 Please pay securely via Razorpay:\n🔗 ${paymentData.paymentUrl}\n\n*Aapka order auto-confirm ho jayega payment successful hote hi!*`;
         session.cart = []; 
         await session.save();
       } else {
@@ -326,7 +316,7 @@ async function actionExecutionNode(state) {
           paymentAttemptsMemory[phone] = 0; 
           replyText = `❌ *Order Cancelled*\n\nWe haven't received your payment after 3 attempts. Your order has been automatically cancelled for security reasons.\n\nReply *1* to browse the menu and order again.`;
         } else {
-          replyText = `⚠️ *Payment Not Received Yet*\n\nI just checked the royal treasury, but your payment hasn't reflected yet. *(Attempt ${attempts}/3)*\n\nPlease ensure you have paid using the Razorpay link provided. If you just paid, please wait a few seconds and reply "Paid" again.`;
+          replyText = `⚠️ *Payment Not Received Yet*\n\nI just checked the royal treasury, but your payment hasn't reflected yet. *(Attempt ${attempts}/3)*\n\nPlease ensure you have paid using the Razorpay link provided.`;
         }
       }
       break;
@@ -337,13 +327,10 @@ async function actionExecutionNode(state) {
     }
   }
 
-  // Update Context Memory
   userContextMemory[phone] = replyText;
-
   return { ...state, replyText }; 
 }
 
-/* ---------------- 4. BUILD GRAPH ---------------- */
 function buildOrderGraph() {
   const graph = new StateGraph({
     channels: {
