@@ -87,8 +87,13 @@ exports.createOrder = async (req, res, next) => {
           name: menuItem.name,
           price,
           quantity: item.quantity,
+<<<<<<< Updated upstream
           total: price * item.quantity,
           image: menuItem.images?.[0]?.url || null,
+=======
+          total,
+          // image: menuItem.images?.[0]?.url || "",
+>>>>>>> Stashed changes
         });
       }
 
@@ -208,9 +213,18 @@ exports.getOrderById = async (req, res, next) => {
   try {
     const id = req.params.id;
 
+<<<<<<< Updated upstream
     const order = await Order.findById(id)
+=======
+    const isMongoId = /^[0-9a-fA-F]{24}$/.test(id);
+
+    const order = await Order.findOne(isMongoId ? { _id: id } : { orderId: id })
+>>>>>>> Stashed changes
       .populate("items.menuItem", "name basePrice images")
       .populate("items.combo", "name price image");
+
+      console.log("user ", req.user)
+      console.log("order", order)
 
     if (!order) {
       return res.status(404).json({
