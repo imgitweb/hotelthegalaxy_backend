@@ -43,10 +43,6 @@ const path = require("path");
 const router = require("express").Router();
 
 const app = express();
-
-// ========================================================
-// 1. CORS CONFIGURATION (MUST BE AT THE VERY TOP)
-// ========================================================
 const allowedOrigins = [
   "http://localhost:3000",
   "http://localhost:3002",
@@ -56,6 +52,8 @@ const allowedOrigins = [
   process.env.CLIENT_URL,
   "https://uat.hotelthegalaxy.in",
   "https://www.uat.hotelthegalaxy.in",
+  "https://admin.hotelthegalaxy.in",
+  "https://www.admin.hotelthegalaxy.in",
 ].filter(Boolean);
 
 const corsOptions = {
@@ -67,15 +65,12 @@ const corsOptions = {
     return callback(new Error("Not allowed by CORS"));
   },
   credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'], // Explicitly allow methods
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'] // Explicitly allow headers
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'] 
 };
 
-// Use CORS for all routes
 app.use(cors(corsOptions));
-// 👈 FIX: Yahan String '/*' ki jagah Native RegExp /.*/ use kiya hai
-// Ye naye Express versions mein crash nahi hoga
-// app.options(/.*/, cors(corsOptions));
+
 
 
 
@@ -85,40 +80,22 @@ app.post(
   require("./controllers/paymentController").handleWebhook
 );
 
-
-// ========================================================
-// 2. SECURITY HEADERS & PROXY
-// ========================================================
-
 app.set("trust proxy", 1);
 app.use(
   helmet({
     crossOriginResourcePolicy: { policy: "cross-origin" },
   })
 );
-
-// ========================================================
-// 3. BODY PARSERS & SANITIZATION
-// ========================================================
 app.use(express.json({ limit: "10kb" }));
 app.use(express.urlencoded({ extended: false }));
 app.use(cookieParser());
 app.use(compression());
 app.use("/api/chat", chatRoutes);
-
-
-
-// ========================================================
-// 4. LOGGERS
-// ========================================================
 app.use(httpLogger);
 if (process.env.NODE_ENV === "development") {
   app.use(morgan("dev"));
 }
 
-// ========================================================
-// 5. STATIC FILES
-// ========================================================
 app.use(
   "/uploads",
   express.static(path.join(__dirname, "..", "/public/uploads"))
