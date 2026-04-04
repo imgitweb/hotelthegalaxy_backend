@@ -19,7 +19,6 @@ const llm = new ChatOpenAI({
   temperature: 0 
 });
 
-// 🔥 FIXED: Removed .optional() and used .nullable() to satisfy OpenAI Strict Mode
 const IntentSchema = z.object({
   intent: z.enum([
     "GREETING", "SHOW_MENU", "ADD_TO_CART", "REMOVE_FROM_CART", 
@@ -30,7 +29,6 @@ const IntentSchema = z.object({
   
   user_name: z.string().nullable().describe("Extract the user's name if they are providing it."),
   
-  // 🔥 Ye line theek ki gayi hai:
   extracted_items: z.array(z.object({
     name: z.string(),
     quantity: z.number()
@@ -72,6 +70,7 @@ async function agentDecisionNode(state) {
     if (msg === "2" || msg.includes("checkout")) return { ...state, aiIntent: "CHECKOUT", aiData: {} };
   }
 
+  // 🔥 FAST ROUTING for Address Selection (Checks if user entered 1, 2, or 3)
   if (previousBotMessage.includes("Where shall we dispatch")) {
     const num = parseInt(msg);
     if (!isNaN(num) && msg.length <= 1) return { ...state, aiIntent: "SELECT_SAVED_ADDRESS", aiData: { address_index: num, intent: "SELECT_SAVED_ADDRESS" } };
@@ -80,6 +79,7 @@ async function agentDecisionNode(state) {
   if (["hi", "hello", "start", "home"].includes(msg)) return { ...state, aiIntent: "GREETING", aiData: {} };
   if (["checkout", "pay", "done", "paid"].includes(msg)) return { ...state, aiIntent: "COMPLETE_ORDER", aiData: {} }; 
 
+  // 🔥 UPDATED PROMPT: Added logic so AI correctly handles new address input
   const prompt = `
     You are an intelligent order routing AI for "The Galaxy Hotel". 
     Read the 'BOT_LAST_MESSAGE' and the 'USER_REPLY'. Compare them to understand what the user wants to do.
@@ -90,7 +90,7 @@ async function agentDecisionNode(state) {
     
     === DECISION RULES & MAPPING (CRITICAL) ===
     1. ADD/REMOVE ITEMS: If user types food names -> intent "ADD_TO_CART". If "remove" -> intent "REMOVE_FROM_CART".
-    2. NEW ADDRESS: If BOT_LAST_MESSAGE asks for a new address and USER_REPLY contains text like "Area: xyz" -> Intent is "PROVIDE_ADDRESS". Extract the 'area' and 'landmark'.
+    2. NEW ADDRESS: If BOT_LAST_MESSAGE asks for a new address (like "Add a NEW Address", "Where shall we dispatch", or "Please provide your delivery address") AND the user provides text (not a single digit), -> Intent is "PROVIDE_ADDRESS". Extract the 'area' and 'landmark'.
     3. COMPLETE ORDER: If BOT_LAST_MESSAGE gave a Razorpay payment link and asked to reply "Paid" -> USER_REPLY "paid", "done", "yes" = "COMPLETE_ORDER".
     4. ONBOARDING: If BOT_LAST_MESSAGE asks for the user's name -> intent "PROVIDE_NAME".
     5. ORDER STATS: If user asks about their "history" -> intent "ORDER_STATS".
@@ -246,6 +246,7 @@ async function actionExecutionNode(state) {
       break;
     }
 
+    // 🔥 UPDATED: Dynamic Address List with "+ Add a NEW Address" option
     case "CHECKOUT": {
       const addresses = await getUserAddresses(user._id);
       
@@ -253,29 +254,40 @@ async function actionExecutionNode(state) {
       
       if (addresses && addresses.length > 0) {
         addressPrompt += "Reply with a number to choose a saved address:\n";
-        const topAddresses = addresses.slice(0, 2);
+        const topAddresses = addresses.slice(0, 2); // Show max 2 saved addresses
+        let nextIndex = 1;
+        
         topAddresses.forEach((addr, index) => {
           const streetStr = addr.street || "";
           const landmarkStr = addr.landmark ? `, ${addr.landmark}` : "";
           addressPrompt += `*${index + 1}.* ${addr.label || "Home"} - ${streetStr}${landmarkStr}\n`;
+          nextIndex = index + 2; // Calculate the next available number
         });
-        addressPrompt += "\n👉 *OR Provide a NEW address by typing in this exact format:*\n";
+        
+        // Add dynamic option for a new address
+        addressPrompt += `\n*${nextIndex}.* ➕ Add a NEW Address\n`;
       } else {
-        addressPrompt += "👉 *Please provide your delivery address in this exact format:*\n\n";
+        addressPrompt += "👉 *Please provide your delivery address in this exact format:*\n\nArea: 007, 8th floor bansal one\nLandmark: db mall";
       }
-
-      addressPrompt += `Area: 007, 8th floor bansal one\nLandmark: db mall`;
       
       replyText = addressPrompt;
       break;
     }
 
+    // 🔥 UPDATED: Logic to handle both saved address selection AND the "Add new address" trigger
     case "SELECT_SAVED_ADDRESS": {
       const savedAddresses = await getUserAddresses(user._id);
+      const topAddresses = savedAddresses.slice(0, 2); // Same logic as CHECKOUT
       const index = (aiData?.address_index || 1) - 1; 
       
-      if (savedAddresses && savedAddresses[index]) {
-         const addressId = savedAddresses[index]._id;
+      // Check if user selected the "➕ Add a NEW Address" option
+      if (index === topAddresses.length) {
+         replyText = "🏠 *Add a New Address*\n\nPlease provide your delivery address in this exact format:\n\nArea: 007, 8th floor bansal one\nLandmark: db mall";
+         break;
+      } 
+      // Proceed with saved address
+      else if (topAddresses[index]) {
+         const addressId = topAddresses[index]._id;
          session.addressId = addressId;
          await session.save();
          
@@ -289,18 +301,19 @@ async function actionExecutionNode(state) {
 
          if (paymentData.success) {
            paymentAttemptsMemory[phone] = 0; 
-           replyText = `✅ Address confirmed: ${savedAddresses[index].street}\n\n💳 *Online Royal Treasury*\nGrand Total: *₹${paymentData.totalAmount.toFixed(2)}*\n\n👉 Please pay securely via Razorpay:\n🔗 ${paymentData.paymentUrl}\n\n*Aapka order auto-confirm ho jayega payment successful hote hi!*`;
+           replyText = `✅ Address confirmed: ${topAddresses[index].street}\n\n💳 *Online Royal Treasury*\nGrand Total: *₹${paymentData.totalAmount.toFixed(2)}*\n\n👉 Please pay securely via Razorpay:\n🔗 ${paymentData.paymentUrl}\n\n*Aapka order auto-confirm ho jayega payment successful hote hi!*`;
            session.cart = []; 
            await session.save();
          } else {
            replyText = "Apologies, there was an issue generating your payment link. Please try again.";
          }
       } else {
-         replyText = "Forgive me, but I do not recognize that choice. Please provide a new address in the Area/Landmark format.";
+         replyText = "Forgive me, but I do not recognize that choice. Please choose a valid number or type your address directly.";
       }
       break;
     }
 
+    // 🔥 Handles the new address the user types after selecting "Add a NEW Address"
     case "PROVIDE_ADDRESS": {
       const extractedAddress = aiData?.address || { area: inputText, landmark: "Not provided" };
       
