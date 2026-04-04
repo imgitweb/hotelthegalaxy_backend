@@ -17,9 +17,7 @@ async function checkUserExists(phone) {
 
 // 2. Register user with exact schema requirements
 async function registerNewUser(phone, fullName) {
-  if (!phone.startsWith("+")) {
-    phone = "+" + phone;
-  }
+  
   return await User.create({ 
     phone, 
     role: "customer", 
@@ -285,7 +283,8 @@ async function processBotOrderAndPayment(userId, phone, cartItems, addressId) {
     const uniqueOrderNumber = "ORD-" + Date.now() + "-" + Math.floor(Math.random() * 1000);
 
     const newOrder = new Order({
-      orderNumber: uniqueOrderNumber, 
+      orderNumber: uniqueOrderNumber,
+      orderSource: "whatsapp",
       user: userId,
       items: cartItems.map(item => ({ 
         menuItem: item.menuItemId, 

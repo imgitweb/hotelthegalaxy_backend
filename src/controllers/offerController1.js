@@ -1,48 +1,12 @@
 const Offer = require("../models/Offer");
 const MenuItem = require("../models/dining/menuItemmodel");
 const Combo = require("../models/dining/combomodel");
-const User = require("../models/User"); // 🔥 NEW: User model import kiya for fetching phone numbers
-const { sendOfferTemplate } = require("../utils/whatsaap/sendOfferTemplate");
+const sendOfferTemplate = require("../utils/whatsaap/sendOfferTemplate")
 
 const uploadToCloudinary = require("../utils/cloudUpload");
 const cloudinary = require("../config/cloudinary");
 
 const { getFinalPrice } = require("../services/priceService");
-
-// 🔥 NEW: Background function to broadcast WhatsApp messages
-const sendOfferToAllUsers = async (offerData) => {
-  try {
-    // 1. Get all active users with phone numbers
-    const users = await User.find({ phone: { $exists: true, $ne: null } }).select("phone fullName");
-    
-    // 2. Format discount text
-    const discountText = offerData.discountType === "percentage" 
-      ? `${offerData.discountValue}% OFF` 
-      : `Flat ₹${offerData.discountValue} OFF`;
-
-    // 3. Format dates to Indian standard readable format
-    const startDate = new Date(offerData.startDate).toLocaleDateString("en-IN");
-    const endDate = new Date(offerData.endDate).toLocaleDateString("en-IN");
-
-    // 4. Send messages to all users
-    for (const user of users) {
-      let formattedPhone = user.phone.toString().replace(/\D/g, '');
-      if (formattedPhone.length === 10) formattedPhone = "91" + formattedPhone;
-
-      // Call the template function
-      await sendOfferTemplate(formattedPhone, {
-        imageUrl: offerData.image.url,
-        userName: user.fullName || "Guest",
-        offerName: offerData.name,
-        discountText: discountText,
-        startDate: startDate,
-        endDate: endDate
-      });
-    }
-  } catch (error) {
-    console.error("Error in background WhatsApp broadcast:", error);
-  }
-};
 
 const getMenuItems = async (req, res) => {
   try {
@@ -127,12 +91,6 @@ const createOffer = async (req, res) => {
       combos,
       image: imageData,
     });
-
-    // 🔥 NEW: Trigger WhatsApp message broadcast in background
-    // Sirf tab bhejein jab image upload hui ho, kyunki template mein header image mandatory hai
-    if (imageData.url) {
-        sendOfferToAllUsers(offer); // Note: Await nahi lagaya taaki API response slow na ho
-    }
 
     res.status(201).json({
       success: true,

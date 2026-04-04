@@ -206,6 +206,12 @@ const orderSchema = new mongoose.Schema(
       default: 0,
     },
 
+    orderSource: {
+      type: String,
+      enum: ["website", "whatsapp"],
+      default: "website", // By default website count hoga
+    },
+
     eta: {
       type: Number,
       default: 0,

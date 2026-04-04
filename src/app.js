@@ -128,7 +128,7 @@ app.use("/api/v1/reviews", reviewRoutes);
 app.use("/api/v1/dining", combsRoute);
 
 app.use("/api/v1/settings", settingRoutes);
-app.use("/webhook", whatsappRoutes);
+app.use("/api/webhook", whatsappRoutes);
 // app.use("/api/chat", chatRoutes);
 
 app.use("/api/v1/dining/offers", offerRoutepublic);
