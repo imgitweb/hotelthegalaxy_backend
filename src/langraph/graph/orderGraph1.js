@@ -4,10 +4,9 @@ const { ChatOpenAI } = require("@langchain/openai");
 const { z } = require("zod");
 
 const {
-  getOrCreateUser, getOrCreateSession, getActiveOrder,
-  getCategories, getMenuByCategory, getUserAddresses,
-  saveNewAddress, addItemsToCart, placeOrder, getUserOrderStats, // <-- Make sure getUserOrderStats is imported here
-  cancelOrder, removeItemsFromCart, 
+  checkUserExists, registerNewUser, getOrCreateSession, getActiveOrder,
+  getCategories, getMenuByCategory, getUserAddresses, getUserOrderStats,
+  saveNewAddress, addItemsToCart, placeOrder, cancelOrder, removeItemsFromCart, 
   processBotOrderAndPayment, checkLatestPaymentStatus
 } = require("../tools/orderTools");
 
@@ -23,12 +22,13 @@ const llm = new ChatOpenAI({
 const IntentSchema = z.object({
   intent: z.enum([
     "GREETING", "SHOW_MENU", "SHOW_CATEGORY_ITEMS", "ADD_TO_CART", "REMOVE_FROM_CART", 
-    "CHECKOUT", "PROVIDE_ADDRESS", "SELECT_SAVED_ADDRESS", 
+    "CHECKOUT", "PROVIDE_ADDRESS", "SELECT_SAVED_ADDRESS", "PROVIDE_NAME", // 🔥 Added PROVIDE_NAME
     "INITIATE_RAZORPAY_PAYMENT", "COMPLETE_ORDER", "TRACK_ORDER", "ORDER_STATS", "CANCEL_ORDER", "HELP", "UNKNOWN"
   ]).describe("Identify the core intent based on user input and the previous bot message context."),
   
   category_index: z.number().nullable(),
   category_name: z.string().nullable(),
+  user_name: z.string().nullable().describe("Extract the user's name if they are providing it."), // 🔥 Added user_name
   extracted_items: z.array(z.object({
     name: z.string(),
     quantity: z.number()
@@ -58,7 +58,6 @@ async function agentDecisionNode(state) {
     if (msg === "3" || msg.includes("help")) return { ...state, aiIntent: "HELP", aiData: {} };
   }
 
-  // Handle direct requests for stats
   if (msg.includes("stats") || msg.includes("history") || msg.includes("kitne ka order") || msg.includes("purane order")) {
     return { ...state, aiIntent: "ORDER_STATS", aiData: {} };
   }
@@ -93,7 +92,8 @@ async function agentDecisionNode(state) {
     1. ADD/REMOVE ITEMS: If user types food names -> intent "ADD_TO_CART". If "remove" -> intent "REMOVE_FROM_CART".
     2. NEW ADDRESS: If BOT_LAST_MESSAGE asks for a new address and USER_REPLY contains text like "Area: xyz" or "Landmark: abc" OR any long physical address string -> Intent is "PROVIDE_ADDRESS". Extract the 'area' and 'landmark'.
     3. COMPLETE ORDER: If BOT_LAST_MESSAGE gave a Razorpay payment link and asked to reply "Paid" -> USER_REPLY "paid", "done", "yes" = "COMPLETE_ORDER".
-    4. ORDER STATS: If user asks about their "history", "stats", "total spent", or "past orders" -> intent "ORDER_STATS".
+    4. ONBOARDING: If BOT_LAST_MESSAGE asks for the user's name -> intent "PROVIDE_NAME". Extract their name into 'user_name'.
+    5. ORDER STATS: If user asks about their "history", "stats", "total spent" -> intent "ORDER_STATS".
   `;
 
   try {
@@ -107,14 +107,40 @@ async function agentDecisionNode(state) {
 
 async function actionExecutionNode(state) {
   const { aiIntent, aiData, phone, inputText } = state;
-  const user = await getOrCreateUser(phone);
+  
+  // 🔥 1. CHECK IF USER EXISTS
+  let user = await checkUserExists(phone);
+
+  // 🛑 2. ONBOARDING INTERCEPTOR (Agar naya user hai aur wo apna naam nahi bata raha)
+  if (!user && aiIntent !== "PROVIDE_NAME") {
+    let replyText = "👑 *Welcome to Royal Hotel!*\n\nIt is an absolute honor to receive you. As this is your first visit, may I humbly know your good name so I can address you properly?";
+    userContextMemory[phone] = replyText;
+    return { ...state, replyText };
+  }
+
+  // Ab yahan se session chalega
   const session = await getOrCreateSession(phone); 
   let replyText = "";
 
   switch (aiIntent) {
+    
+    // 🔥 3. NEW USER PROVIDES NAME
+    case "PROVIDE_NAME": {
+      const extractedName = aiData?.user_name || inputText.trim() || "Guest";
+      
+      // Database me officially register karo
+      if (!user) {
+         user = await registerNewUser(phone, extractedName);
+      }
+      
+      replyText = `Splendid to meet you, *${user.fullName}*! 👑\n\nHow may I humbly serve you today, esteemed guest?\n\nReply with a number:\n*1.* 🍔 Order a Feast (Menu)\n*3.* ℹ️ Seek My Assistance (Help)`;
+      break;
+    }
+
     case "GREETING": {
       const hasActiveOrder = await getActiveOrder(user._id);
-      replyText = `👑 *Welcome to Royal Hotel*\n\nHow may I humbly serve you today, esteemed guest?\n\nReply with a number:\n*1.* 🍔 Order a Feast (Menu)`;
+      // 🔥 Ab personalized greeting jayegi
+      replyText = `👑 *Welcome back, ${user.fullName}!*\n\nHow may I humbly serve you today?\n\nReply with a number:\n*1.* 🍔 Order a Feast (Menu)`;
       if (hasActiveOrder) replyText += `\n*2.* 📦 Track Your Royal Order`;
       replyText += `\n*3.* ℹ️ Seek My Assistance (Help)\n\n*(Type "Stats" to view your royal history)*`;
       break;
@@ -136,7 +162,6 @@ async function actionExecutionNode(state) {
 
         replyText += `\n\nWhat would you like to do?\n*1.* 🍔 Order More Delights`;
 
-        // 🔥 LOGIC: Agar order confirm ya uske aage hai, toh cancel option mat do
         const uncancelableStatuses = ["confirmed", "preparing", "dispatched", "out_for_delivery", "delivered"];
         
         if (!uncancelableStatuses.includes(orderStatus)) {
@@ -161,11 +186,10 @@ async function actionExecutionNode(state) {
     }
 
     case "ORDER_STATS": {
-      // 🔥 LOGIC: Fetch lifetime stats
       const stats = await getUserOrderStats(user._id);
       
       if (stats && stats.totalOrders > 0) {
-        replyText = `📜 *Your Royal History*\n\n🛍️ Total Orders Placed: *${stats.totalOrders}*\n✅ Successfully Delivered: *${stats.deliveredOrders}*\n❌ Cancelled Orders: *${stats.cancelledOrders}*\n\n💎 Total Treasure Spent: *₹${stats.totalSpent.toFixed(2)}*\n\nReply *1* whenever you wish to order again!`;
+        replyText = `📜 *Your Royal History, ${user.fullName}*\n\n🛍️ Total Orders Placed: *${stats.totalOrders}*\n✅ Successfully Delivered: *${stats.deliveredOrders}*\n❌ Cancelled Orders: *${stats.cancelledOrders}*\n\n💎 Total Treasure Spent: *₹${stats.totalSpent.toFixed(2)}*\n\nReply *1* whenever you wish to order again!`;
       } else {
         replyText = "You have not yet graced us with a completed order, my lord.\n\nReply *1* to explore our feasts and begin your royal journey.";
       }

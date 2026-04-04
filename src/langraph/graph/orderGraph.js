@@ -5,7 +5,7 @@ const { z } = require("zod");
 
 const {
   checkUserExists, registerNewUser, getOrCreateSession, getActiveOrder,
-  getCategories, getMenuByCategory, getUserAddresses, getUserOrderStats,
+  getTodayRosterItems, getUserAddresses, getUserOrderStats,
   saveNewAddress, addItemsToCart, placeOrder, cancelOrder, removeItemsFromCart, 
   processBotOrderAndPayment, checkLatestPaymentStatus
 } = require("../tools/orderTools");
@@ -19,25 +19,27 @@ const llm = new ChatOpenAI({
   temperature: 0 
 });
 
+// 🔥 FIXED: Removed .optional() and used .nullable() to satisfy OpenAI Strict Mode
 const IntentSchema = z.object({
   intent: z.enum([
-    "GREETING", "SHOW_MENU", "SHOW_CATEGORY_ITEMS", "ADD_TO_CART", "REMOVE_FROM_CART", 
-    "CHECKOUT", "PROVIDE_ADDRESS", "SELECT_SAVED_ADDRESS", "PROVIDE_NAME", // 🔥 Added PROVIDE_NAME
-    "INITIATE_RAZORPAY_PAYMENT", "COMPLETE_ORDER", "TRACK_ORDER", "ORDER_STATS", "CANCEL_ORDER", "HELP", "UNKNOWN"
+    "GREETING", "SHOW_MENU", "ADD_TO_CART", "REMOVE_FROM_CART", 
+    "CHECKOUT", "PROVIDE_ADDRESS", "SELECT_SAVED_ADDRESS", "PROVIDE_NAME", 
+    "INITIATE_RAZORPAY_PAYMENT", "COMPLETE_ORDER", "TRACK_ORDER", "ORDER_STATS", 
+    "CANCEL_ORDER", "HELP", "GENERAL_INFO", "UNKNOWN" 
   ]).describe("Identify the core intent based on user input and the previous bot message context."),
   
-  category_index: z.number().nullable(),
-  category_name: z.string().nullable(),
-  user_name: z.string().nullable().describe("Extract the user's name if they are providing it."), // 🔥 Added user_name
+  user_name: z.string().nullable().describe("Extract the user's name if they are providing it."),
+  
+  // 🔥 Ye line theek ki gayi hai:
   extracted_items: z.array(z.object({
     name: z.string(),
     quantity: z.number()
-  })),
+  })).nullable().describe("Extract food items and quantities. If none, return empty array."),
   
   address: z.object({
-    area: z.string().describe("Extract the main street, area, or flat details (e.g. '007, 8th floor bansal one')"),
-    landmark: z.string().describe("Extract the landmark if provided (e.g. 'db mall'). If not provided, return 'Not provided'.")
-  }).nullable().describe("Extract area and landmark if the user provides a new physical address."),
+    area: z.string().describe("Extract the main street, area, or flat details"),
+    landmark: z.string().describe("Extract the landmark if provided")
+  }).nullable(),
 
   address_index: z.number().nullable()
 });
@@ -51,8 +53,11 @@ async function agentDecisionNode(state) {
   const previousBotMessage = userContextMemory[phone] || "None";
   console.log(`🧐 Memory Context for ${phone}:`, previousBotMessage.substring(0, 60).replace(/\n/g, ' ') + "...");
 
-  // 🔥 FAST ROUTING
-  if (previousBotMessage.includes("Welcome to Royal Hotel") || previousBotMessage.includes("How may I humbly serve you")) {
+  if (msg.includes("address") || msg.includes("location") || msg.includes("phone") || msg.includes("contact") || msg.includes("where")) {
+    return { ...state, aiIntent: "GENERAL_INFO", aiData: {} };
+  }
+
+  if (previousBotMessage.includes("Welcome to The Galaxy Hotel") || previousBotMessage.includes("How may I humbly serve you")) {
     if (msg === "1" || msg.includes("menu")) return { ...state, aiIntent: "SHOW_MENU", aiData: {} };
     if (msg === "2" || msg.includes("track")) return { ...state, aiIntent: "TRACK_ORDER", aiData: {} };
     if (msg === "3" || msg.includes("help")) return { ...state, aiIntent: "HELP", aiData: {} };
@@ -62,13 +67,8 @@ async function agentDecisionNode(state) {
     return { ...state, aiIntent: "ORDER_STATS", aiData: {} };
   }
 
-  if (previousBotMessage.includes("Our Menu Categories")) {
-    const num = parseInt(msg);
-    if (!isNaN(num) && msg.length <= 2) return { ...state, aiIntent: "SHOW_CATEGORY_ITEMS", aiData: { category_index: num, intent: "SHOW_CATEGORY_ITEMS" } };
-  }
-
   if (previousBotMessage.includes("What is your next command?") || previousBotMessage.includes("Your Updated Cart")) {
-    if (msg === "1" || msg.includes("add")) return { ...state, aiIntent: "SHOW_MENU", aiData: {} };
+    if (msg === "1" || msg.includes("add") || msg.includes("menu")) return { ...state, aiIntent: "SHOW_MENU", aiData: {} };
     if (msg === "2" || msg.includes("checkout")) return { ...state, aiIntent: "CHECKOUT", aiData: {} };
   }
 
@@ -81,7 +81,7 @@ async function agentDecisionNode(state) {
   if (["checkout", "pay", "done", "paid"].includes(msg)) return { ...state, aiIntent: "COMPLETE_ORDER", aiData: {} }; 
 
   const prompt = `
-    You are an intelligent order routing AI for the "Royal Hotel". 
+    You are an intelligent order routing AI for "The Galaxy Hotel". 
     Read the 'BOT_LAST_MESSAGE' and the 'USER_REPLY'. Compare them to understand what the user wants to do.
 
     === CONTEXT ===
@@ -90,10 +90,11 @@ async function agentDecisionNode(state) {
     
     === DECISION RULES & MAPPING (CRITICAL) ===
     1. ADD/REMOVE ITEMS: If user types food names -> intent "ADD_TO_CART". If "remove" -> intent "REMOVE_FROM_CART".
-    2. NEW ADDRESS: If BOT_LAST_MESSAGE asks for a new address and USER_REPLY contains text like "Area: xyz" or "Landmark: abc" OR any long physical address string -> Intent is "PROVIDE_ADDRESS". Extract the 'area' and 'landmark'.
+    2. NEW ADDRESS: If BOT_LAST_MESSAGE asks for a new address and USER_REPLY contains text like "Area: xyz" -> Intent is "PROVIDE_ADDRESS". Extract the 'area' and 'landmark'.
     3. COMPLETE ORDER: If BOT_LAST_MESSAGE gave a Razorpay payment link and asked to reply "Paid" -> USER_REPLY "paid", "done", "yes" = "COMPLETE_ORDER".
-    4. ONBOARDING: If BOT_LAST_MESSAGE asks for the user's name -> intent "PROVIDE_NAME". Extract their name into 'user_name'.
-    5. ORDER STATS: If user asks about their "history", "stats", "total spent" -> intent "ORDER_STATS".
+    4. ONBOARDING: If BOT_LAST_MESSAGE asks for the user's name -> intent "PROVIDE_NAME".
+    5. ORDER STATS: If user asks about their "history" -> intent "ORDER_STATS".
+    6. MENU: If user asks for menu or wants to order something -> intent "SHOW_MENU".
   `;
 
   try {
@@ -108,41 +109,40 @@ async function agentDecisionNode(state) {
 async function actionExecutionNode(state) {
   const { aiIntent, aiData, phone, inputText } = state;
   
-  // 🔥 1. CHECK IF USER EXISTS
   let user = await checkUserExists(phone);
 
-  // 🛑 2. ONBOARDING INTERCEPTOR (Agar naya user hai aur wo apna naam nahi bata raha)
-  if (!user && aiIntent !== "PROVIDE_NAME") {
-    let replyText = "👑 *Welcome to Royal Hotel!*\n\nIt is an absolute honor to receive you. As this is your first visit, may I humbly know your good name so I can address you properly?";
+  if (!user && aiIntent !== "PROVIDE_NAME" && aiIntent !== "GENERAL_INFO") {
+    let replyText = "👑 *Welcome to The Galaxy Hotel!*\n\nIt is an absolute honor to receive you. As this is your first visit, may I humbly know your good name so I can address you properly?";
     userContextMemory[phone] = replyText;
     return { ...state, replyText };
   }
 
-  // Ab yahan se session chalega
   const session = await getOrCreateSession(phone); 
   let replyText = "";
 
   switch (aiIntent) {
     
-    // 🔥 3. NEW USER PROVIDES NAME
+    case "GENERAL_INFO": {
+      replyText = `🏨 *The Galaxy Hotel*\n\n📍 *Address:* PG College Road, Lalbagh, Chhindwara\n📞 *Contact:* +91 6262633305\n📧 *Email:* gmhotelthegalaxy@gmail.com\n\nReply *1* to view today's special menu or order a feast!`;
+      break;
+    }
+
     case "PROVIDE_NAME": {
       const extractedName = aiData?.user_name || inputText.trim() || "Guest";
       
-      // Database me officially register karo
       if (!user) {
          user = await registerNewUser(phone, extractedName);
       }
       
-      replyText = `Splendid to meet you, *${user.fullName}*! 👑\n\nHow may I humbly serve you today, esteemed guest?\n\nReply with a number:\n*1.* 🍔 Order a Feast (Menu)\n*3.* ℹ️ Seek My Assistance (Help)`;
+      replyText = `Splendid to meet you, *${user.fullName}*! 👑\n\nHow may I humbly serve you today, esteemed guest?\n\nReply with a number:\n*1.* 🍔 Order a Feast (Menu)\n*3.* ℹ️ Seek My Assistance (Help)\n\n*(You can also ask me for our address or contact info!)*`;
       break;
     }
 
     case "GREETING": {
       const hasActiveOrder = await getActiveOrder(user._id);
-      // 🔥 Ab personalized greeting jayegi
       replyText = `👑 *Welcome back, ${user.fullName}!*\n\nHow may I humbly serve you today?\n\nReply with a number:\n*1.* 🍔 Order a Feast (Menu)`;
       if (hasActiveOrder) replyText += `\n*2.* 📦 Track Your Royal Order`;
-      replyText += `\n*3.* ℹ️ Seek My Assistance (Help)\n\n*(Type "Stats" to view your royal history)*`;
+      replyText += `\n*3.* ℹ️ Seek My Assistance (Help)\n\n*(Type "Stats" to view your royal history or ask for our Location)*`;
       break;
     }
 
@@ -197,40 +197,18 @@ async function actionExecutionNode(state) {
     }
 
     case "HELP": {
-      replyText = `🎧 *Royal Hotel Servants at Your Beck & Call*\n\n📞 +91 9876543210\n📧 servants@royalhotel.com\n\nReply *1* to behold the menu.`;
+      replyText = `🎧 *The Galaxy Hotel Servants at Your Beck & Call*\n\n📞 +91 6262633305\n📧 gmhotelthegalaxy@gmail.com\n\nReply *1* to behold the menu.`;
       break;
     }
 
     case "SHOW_MENU": {
-      const categoriesList = await getCategories();
-      replyText = "🍽️ *Our Menu Categories:*\nI beg you, simply reply with the number of your desired category:\n\n";
-      (categoriesList || []).forEach((c, index) => {
-        replyText += `*${index + 1}.* ${c.name}\n`;
-      });
-      break;
-    }
-
-    case "SHOW_CATEGORY_ITEMS": {
-      const categories = await getCategories();
-      let selectedCat = null;
+      const items = await getTodayRosterItems();
       
-      const catIndex = aiData?.category_index;
-      const catName = aiData?.category_name;
-
-      if (catIndex && categories[catIndex - 1]) selectedCat = categories[catIndex - 1];
-      else if (catName) selectedCat = categories.find(c => c.name.toLowerCase().includes(catName.toLowerCase()));
-
-      if (!selectedCat) {
-        replyText = "My deepest apologies, esteemed guest, but I could not find that category in our scrolls. Pray, type 'Menu' to view the options once more.";
-        break;
-      }
-
-      const items = await getMenuByCategory(selectedCat._id);
       if (!items || items.length === 0) {
-        replyText = `I am terribly sorry, my lord, but the pantry is currently bare of items in ${selectedCat.name}.\n\nReply 'Menu' to gaze upon other offerings.`;
+        replyText = "I am terribly sorry, my lord, but today's royal roster is currently empty. Our chefs are preparing the list. Pray, check back in a short while.";
       } else {
-        const menuText = items.map((m, i) => `▪️ ${m.name} - ₹${m.basePrice}`).join("\n");
-        replyText = `📜 *The Royal Selection: ${selectedCat.name}*\n\n${menuText}\n\n👉 *Please type what you desire (e.g., '2 ${items[0]?.name || "items"}')*`;
+        const menuText = items.map((m, i) => `▪️ *${m.name}* - ₹${m.basePrice} _(Max limit: ${m.maxAllowed})_`).join("\n");
+        replyText = `📜 *Today's Royal Feast Selection*\n\n${menuText}\n\n👉 *Please type what you desire to add to your cart (e.g., '2 ${items[0]?.name || "items"}')*`;
       }
       break;
     }
@@ -240,10 +218,13 @@ async function actionExecutionNode(state) {
       if (itemsToAdd.length === 0) {
         replyText = "Forgive my simple mind, my lord, but could you please specify the exact item and quantity? (e.g., '1 Pizza').";
       } else {
-        const cart = await addItemsToCart(phone, itemsToAdd);
+        const { cart, messages } = await addItemsToCart(phone, itemsToAdd);
+        
         let cartSummary = cart.map(item => `▪️ ${item.quantity}x ${item.name} - ₹${item.total}`).join("\n");
         let subtotal = cart.reduce((sum, item) => sum + item.total, 0);
-        replyText = `✅ *Splendid! Added to your royal cart.*\n\n🛒 *Your Banquet So Far:*\n${cartSummary}\n💰 *Current Total: ₹${subtotal}*\n\nWhat is your next command? Reply with:\n*1.* ➕ Add More Delights\n*2.* ➡️ Proceed to Checkout`;
+        let feedbackString = messages.join("\n"); 
+        
+        replyText = `${feedbackString}\n\n🛒 *Your Banquet So Far:*\n${cartSummary}\n💰 *Current Total: ₹${subtotal}*\n\nWhat is your next command? Reply with:\n*1.* ➕ Add More Delights\n*2.* ➡️ Proceed to Checkout`;
       }
       break;
     }
@@ -374,7 +355,7 @@ async function actionExecutionNode(state) {
     }
 
     default: {
-      replyText = "My deepest apologies, esteemed guest, but this humble servant did not quite catch your meaning. You may type 'Menu' to browse our royal feasts, 'Track' to see your order's journey, or 'Help' if you require my assistance.";
+      replyText = "My deepest apologies, esteemed guest, but this humble servant did not quite catch your meaning. You may type 'Menu' to browse our royal feasts, 'Track' to see your order's journey, or ask for our 'Address'.";
     }
   }
 

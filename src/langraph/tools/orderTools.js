@@ -6,22 +6,20 @@ const MenuItem = require("../../models/dining/menuItemmodel");
 const Category = require("../../models/dining/diningCategorymodel"); 
 const Payment = require("../../models/paymentModel");
 const Offer = require("../../models/Offer");
+const DailyRoster = require("../../models/dining/DailyRoster"); 
 const razorpay = require("../../config/razorpay"); 
 const mongoose = require("mongoose");
 
-// 🔥 NEW: Check if user exists
+// 1. Check if user exists
 async function checkUserExists(phone) {
   return await User.findOne({ phone });
 }
 
-// 🔥 NEW: Register user with exact schema requirements
+// 2. Register user with exact schema requirements
 async function registerNewUser(phone, fullName) {
-
   if (!phone.startsWith("+")) {
     phone = "+" + phone;
   }
-
-  
   return await User.create({ 
     phone, 
     role: "customer", 
@@ -31,14 +29,14 @@ async function registerNewUser(phone, fullName) {
   });
 }
 
-// 2. Session Management
+// 3. Session Management
 async function getOrCreateSession(phone) {
   let session = await Session.findOne({ phone });
   if (!session) session = await Session.create({ phone, cart: [] });
   return session;
 }
 
-// 3. Check for Active Orders
+// 4. Check for Active Orders
 async function getActiveOrder(userId) {
   return await Order.findOne({ 
     user: userId, 
@@ -46,17 +44,43 @@ async function getActiveOrder(userId) {
   }).sort({ createdAt: -1 }).lean();
 }
 
-// 4. Get Categories
+// 5. Get Categories
 async function getCategories() {
   return await Category.find({ isActive: true }).lean();
 }
 
-// 5. Fetch Items by Category
-async function getMenuByCategory(categoryId) {
-  return await MenuItem.find({ category: categoryId, isAvailable: true }).lean();
+// 🔥 FIXED: Aapke schema ke hisaab se getTodayRosterItems update kiya
+async function getTodayRosterItems() {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  
+  // Aapke schema mein field ka naam "id" hai, toh usko populate karenge
+  const roster = await DailyRoster.findOne({
+    date: { $gte: today, $lt: new Date(today.getTime() + 24 * 60 * 60 * 1000) }
+  }).populate("items.id"); 
+
+  if (!roster || !roster.items) return [];
+
+  // Aapke schema mein available quantity ka naam "quantity" hai
+  return roster.items
+    .filter(item => item.id && item.quantity > 0) // item.id null na ho aur quantity > 0 ho
+    .map(item => ({
+      _id: item.id._id,           // Populated MenuItem ki _id
+      name: item.id.name,         // Populated MenuItem ka name
+      basePrice: item.id.basePrice, // Populated MenuItem ki price
+      category: item.id.category,   // Populated MenuItem ki category
+      maxAllowed: item.quantity,    // Aapke schema se limit
+      availableNow: item.quantity
+    }));
 }
 
-// 6. Address Management
+// 6. Fetch Items by Category
+async function getMenuByCategory(categoryId) {
+  const rosterItems = await getTodayRosterItems();
+  return rosterItems.filter(item => String(item.category) === String(categoryId));
+}
+
+// 7. Address Management
 async function getUserAddresses(userId) {
   return await Address.find({ user: userId })
     .select("_id street landmark label")
@@ -92,36 +116,60 @@ async function saveNewAddress(userId, addressData) {
   }
 }
 
-// 7. Cart Operations
+// 8. Cart Operations
 async function addItemsToCart(phone, items) {
   const session = await getOrCreateSession(phone);
-  const menu = await MenuItem.find({ isAvailable: true });
+  const rosterItems = await getTodayRosterItems();
+  
+  let feedbackMessages = []; 
 
   for (const it of items) {
     const name = String(it.name || "").toLowerCase();
-    const qty = Math.max(1, parseInt(it.quantity || it.qty || 1));
+    const qtyRequested = Math.max(1, parseInt(it.quantity || it.qty || 1));
 
-    const menuItem = menu.find((m) => m.name.toLowerCase().includes(name));
-    if (!menuItem) continue; 
-
-    const existing = session.cart.find((x) => String(x.menuItemId) === String(menuItem._id));
+    const rosterItem = rosterItems.find((m) => m.name.toLowerCase().includes(name));
     
-    if (existing) {
-      existing.quantity += qty; 
-      existing.total = existing.quantity * existing.price;
+    if (!rosterItem) {
+      feedbackMessages.push(`❌ *${it.name}* aaj ke menu mein available nahi hai.`);
+      continue; 
+    }
+
+    const existing = session.cart.find((x) => String(x.menuItemId) === String(rosterItem._id));
+    const currentCartQty = existing ? existing.quantity : 0;
+    const newTotalQty = currentCartQty + qtyRequested;
+
+    if (newTotalQty > rosterItem.maxAllowed) {
+       const allowedToAdd = rosterItem.maxAllowed - currentCartQty;
+       if (allowedToAdd > 0) {
+           feedbackMessages.push(`⚠️ *${rosterItem.name}* ke liye aap max *${rosterItem.maxAllowed}* order kar sakte hain. Humne cart mein baaki *${allowedToAdd}* add kar diya hai.`);
+           if (existing) {
+               existing.quantity += allowedToAdd;
+               existing.total = existing.quantity * existing.price;
+           } else {
+               session.cart.push({
+                 menuItemId: rosterItem._id, name: rosterItem.name, price: rosterItem.basePrice,
+                 quantity: allowedToAdd, total: rosterItem.basePrice * allowedToAdd
+               });
+           }
+       } else {
+           feedbackMessages.push(`⚠️ Aap already *${rosterItem.name}* ki maximum limit (${rosterItem.maxAllowed}) cart mein add kar chuke hain.`);
+       }
     } else {
-      session.cart.push({
-        menuItemId: menuItem._id,
-        name: menuItem.name,
-        price: menuItem.basePrice,
-        quantity: qty,
-        total: menuItem.basePrice * qty
-      });
+       feedbackMessages.push(`✅ *${qtyRequested}x ${rosterItem.name}* cart mein add ho gaya.`);
+       if (existing) {
+         existing.quantity += qtyRequested; 
+         existing.total = existing.quantity * existing.price;
+       } else {
+         session.cart.push({
+           menuItemId: rosterItem._id, name: rosterItem.name, price: rosterItem.basePrice,
+           quantity: qtyRequested, total: rosterItem.basePrice * qtyRequested
+         });
+       }
     }
   }
   
   await session.save();
-  return session.cart;
+  return { cart: session.cart, messages: feedbackMessages };
 }
 
 async function removeItemsFromCart(phone, items) {
@@ -151,9 +199,10 @@ async function removeItemsFromCart(phone, items) {
   return session.cart;
 }
 
+// 9. Orders & Payments Logic
 async function placeOrder(phone, paymentMethod) {
   let user = await checkUserExists(phone);
-  if (!user) user = await registerNewUser(phone, "Guest"); // Fallback
+  if (!user) user = await registerNewUser(phone, "Guest"); 
   
   const session = await getOrCreateSession(phone);
   
@@ -332,10 +381,9 @@ async function getActiveOffers() {
   }
 }
 
-// 🔥 EXPORTS UPDATED
 module.exports = {
   checkUserExists, registerNewUser, getOrCreateSession, getActiveOrder, getActiveOffers,
-  getCategories, getMenuByCategory, getUserAddresses, getUserOrderStats,
+  getCategories, getMenuByCategory, getUserAddresses, getUserOrderStats, getTodayRosterItems,
   saveNewAddress, addItemsToCart, placeOrder, cancelOrder, removeItemsFromCart, 
   processBotOrderAndPayment, checkLatestPaymentStatus,
 };

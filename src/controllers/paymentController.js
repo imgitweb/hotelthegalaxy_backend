@@ -312,13 +312,15 @@ exports.handleWebhook = async (req, res) => {
         
         console.log(`✅ DATABASE UPDATED: Order ${dbOrderId} is now PAID!`);
 
+        console.log("update .......................................................................................................", updatedOrder)
+
         // 🔥 3. WHATSAPP MESSAGE LOGIC 🔥
         if (updatedOrder) {
             // Notes se ya DB se phone number nikalo
             let userPhone = paymentData.notes?.phone || updatedOrder.address?.phone;
             
             if (userPhone) {
-                // WhatsApp API format ke hisaab se number ko format karna (Sirf numbers, aur 10 digit pe 91)
+                // WhatsApp API format ke hisaab se number ko format karna
                 userPhone = userPhone.toString().replace(/\D/g, ''); 
                 if (userPhone.length === 10) {
                     userPhone = "91" + userPhone; 
@@ -326,8 +328,12 @@ exports.handleWebhook = async (req, res) => {
 
                 const orderNumber = updatedOrder.orderNumber || updatedOrder._id;
                 
+                // 🔥 THE FIX: Amount calculation
+                // Pehle Razorpay ke amount ko convert karenge (best accuracy), agar wo na mile toh database ke pricing object se lenge.
+                const finalAmount = (paymentData.amount / 100) || updatedOrder.pricing?.total || updatedOrder.totalAmount || 0;
+                
                 // Message ka format
-                const successMsg = `🎉 *Payment Successful!*\n\nNamaste! Aapka order *${orderNumber}* confirm ho gaya hai.\n💰 Amount Paid: ₹${updatedOrder.totalAmount}\n\n👨‍🍳 Our grand chefs are now preparing your delicious meal. Hum jald hi ise dispatch karenge!`;
+                const successMsg = `🎉 *Payment Successful!*\n\nNamaste! Aapka order *${orderNumber}* confirm ho gaya hai.\n💰 Amount Paid: ₹${finalAmount}\n\n👨‍🍳 Our grand chefs are now preparing your delicious meal. Hum jald hi ise dispatch karenge!`;
                 
                 // WhatsApp message function call
                 await sendTextMessage(userPhone, successMsg);
