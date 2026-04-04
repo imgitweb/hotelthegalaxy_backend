@@ -16,6 +16,12 @@ async function checkUserExists(phone) {
 
 // 🔥 NEW: Register user with exact schema requirements
 async function registerNewUser(phone, fullName) {
+
+  if (!phone.startsWith("+")) {
+    phone = "+" + phone;
+  }
+
+  
   return await User.create({ 
     phone, 
     role: "customer", 
