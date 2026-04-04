@@ -19,7 +19,7 @@ async function checkUserExists(phone) {
 async function registerNewUser(phone, fullName) {
   
   return await User.create({ 
-    phone:`91${phone}`, 
+    phone:phone, 
     role: "customer", 
     fullName: fullName || "Guest",
     authProvider: "whatsapp",
