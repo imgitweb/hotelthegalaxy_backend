@@ -57,15 +57,24 @@ exports.addAddress = async (req, res, next) => {
       });
     }
 
+    const userId = req.userId || req.riderId;
+
+    if (!userId) {
+      return res.status(401).json({
+        success: false,
+        message: "Unauthorized: user not found in token",
+      });
+    }
+
     if (isDefault) {
       await Address.updateMany(
-        { user: req.user.id },
+        { user: userId },
         { $set: { isDefault: false } },
       );
     }
 
     const address = await Address.create({
-      user: req.user.id,
+      user: userId,
       street,
       landmark,
       label,
@@ -94,7 +103,16 @@ exports.addAddress = async (req, res, next) => {
 
 exports.getAddresses = async (req, res, next) => {
   try {
-    const addresses = await Address.find({ user: req.user.id })
+    const userId = req.userId || req.riderId;
+
+    if (!userId) {
+      return res.status(401).json({
+        success: false,
+        message: "Unauthorized: user not found in token",
+      });
+    }
+
+    const addresses = await Address.find({ user: userId })
       .sort({ createdAt: -1 })
       .lean();
 
@@ -119,9 +137,18 @@ exports.deleteAddress = async (req, res, next) => {
       });
     }
 
+    const userId = req.userId || req.riderId;
+
+    if (!userId) {
+      return res.status(401).json({
+        success: false,
+        message: "Unauthorized: user not found in token",
+      });
+    }
+
     const address = await Address.findOneAndDelete({
       _id: addressId,
-      user: req.user.id,
+      user: userId,
     });
 
     if (!address) {
@@ -163,10 +190,19 @@ exports.updateAddress = async (req, res, next) => {
       });
     }
 
+    const userId = req.userId || req.riderId;
+
+    if (!userId) {
+      return res.status(401).json({
+        success: false,
+        message: "Unauthorized: user not found in token",
+      });
+    }
+
     const address = await Address.findOneAndUpdate(
       {
         _id: addressId,
-        user: req.user.id,
+        user: userId,
       },
       {
         street,
@@ -214,15 +250,24 @@ exports.setDefaultAddress = async (req, res, next) => {
       });
     }
 
+    const userId = req.userId || req.riderId;
+
+    if (!userId) {
+      return res.status(401).json({
+        success: false,
+        message: "Unauthorized: user not found in token",
+      });
+    }
+
     await Address.updateMany(
-      { user: req.user.id },
+      { user: userId },
       { $set: { isDefault: false } },
     );
 
     const address = await Address.findOneAndUpdate(
       {
         _id: addressId,
-        user: req.user.id,
+        user: userId,
       },
       { isDefault: true },
       { new: true },

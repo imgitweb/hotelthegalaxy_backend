@@ -1,10 +1,16 @@
 const Order = require("../../models/User/ordersModel");
+const Trip = require("../../models/TripModel");
+const Rider = require("../../models/rider.model");
+const { generateOTPMap } = require("../../utils/otp");
 const STATUS_FLOW = {
   pending: ["confirmed", "cancelled"],
-  confirmed: ["preparing", "cancelled"],
-  preparing: ["out_for_delivery"],
-  preparing:["delivered"], // fix this issue 
-  out_for_delivery: ["delivered"],
+  confirmed: ["preparing", "out_for_delivery", "cancelled"],
+  preparing: ["ready", "out_for_delivery", "delivered"],
+  ready: ["out_for_delivery", "delivered"],
+  out_for_delivery: ["arrived", "delivered"],
+  arrived: ["delivered"],
+  delivered: [],
+  cancelled: [],
 };
 const FINAL_STATES = ["delivered", "cancelled"];
 exports.getAllOrders = async (req, res, next) => {
@@ -95,6 +101,55 @@ exports.updateOrderStatus = async (req, res, next) => {
     if (newStatus === "out_for_delivery") {
       order.outForDeliveryAt = new Date();
       console.log("🚴 Out for delivery at set");
+
+      // Auto-create or add to trip
+      if (order.rider) {
+        const existingTrip = await Trip.findOne({
+          riderId: order.rider,
+          status: "Active",
+        });
+
+        if (existingTrip) {
+          // Add order to existing trip if not already present
+          if (!existingTrip.orderIds.includes(order._id)) {
+            existingTrip.orderIds.push(order._id);
+            await existingTrip.save();
+            console.log("✅ Order added to existing trip:", existingTrip.tripId);
+          }
+          order.tripId = existingTrip._id;
+        } else {
+          // Create new trip for this order
+          const tripId = `TRIP_${Date.now()}_${Math.random().toString(36).substr(2, 9).toUpperCase()}`;
+          const otpMap = generateOTPMap([order._id.toString()]);
+
+          const trip = await Trip.create({
+            tripId,
+            riderId: order.rider,
+            orderIds: [order._id],
+            status: "Active",
+            orderOtps: otpMap,
+            totalEarnings: order.pricing?.total || 0,
+          });
+
+          // Set delivery OTP
+          order.deliveryOTP = {
+            code: otpMap[order._id.toString()],
+            generatedAt: new Date(),
+            verifiedAt: null,
+            attempts: 0,
+            maxAttempts: 3,
+          };
+
+          // Update rider status
+          await Rider.findByIdAndUpdate(order.rider, {
+            status: "On-Trip",
+            currentTripId: trip._id,
+          });
+
+          order.tripId = trip._id;
+          console.log("✅ New trip created:", trip.tripId);
+        }
+      }
     }
 
     await order.save();
@@ -193,10 +248,57 @@ exports.assignRider = async (req, res, next) => {
     order.rider = riderId;
 
     console.log("✅ Rider assigned");
-    if (order.status === "ready") {
-      order.status = "out_for_delivery";
-      order.outForDeliveryAt = new Date();
-      console.log("🚴 Auto moved to out_for_delivery");
+    if (!["delivered", "cancelled"].includes(order.status)) {
+      if (order.status !== "out_for_delivery") {
+        order.status = "out_for_delivery";
+        order.outForDeliveryAt = new Date();
+        console.log("🚴 Order status moved to out_for_delivery");
+      }
+
+      const existingTrip = await Trip.findOne({
+        riderId: order.rider,
+        status: "Active",
+      });
+
+      if (existingTrip) {
+        if (!existingTrip.orderIds.includes(order._id)) {
+          existingTrip.orderIds.push(order._id);
+          await existingTrip.save();
+          console.log("✅ Order added to existing trip:", existingTrip.tripId);
+        }
+        order.tripId = existingTrip._id;
+      } else {
+        const tripId = `TRIP_${Date.now()}_${Math.random()
+          .toString(36)
+          .substr(2, 9)
+          .toUpperCase()}`;
+        const otpMap = generateOTPMap([order._id.toString()]);
+
+        const trip = await Trip.create({
+          tripId,
+          riderId: order.rider,
+          orderIds: [order._id],
+          status: "Active",
+          orderOtps: otpMap,
+          totalEarnings: order.pricing?.total || 0,
+        });
+
+        order.deliveryOTP = {
+          code: otpMap[order._id.toString()],
+          generatedAt: new Date(),
+          verifiedAt: null,
+          attempts: 0,
+          maxAttempts: 3,
+        };
+
+        await Rider.findByIdAndUpdate(order.rider, {
+          status: "On-Trip",
+          currentTripId: trip._id,
+        });
+
+        order.tripId = trip._id;
+        console.log("✅ New trip created:", trip.tripId);
+      }
     }
 
     await order.save();
@@ -220,7 +322,7 @@ exports.getOrderHistory = async (req, res, next) => {
     const orders = await Order.find({
       status: { $in: ["delivered", "cancelled"] },
     })
-      .populate("user", "name phone")
+      .populate("user", "fullName phone")
       .populate("rider", "name phone")
       .sort({ createdAt: -1 });
 

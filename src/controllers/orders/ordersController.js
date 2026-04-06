@@ -23,7 +23,7 @@ function calculateDeliveryCharge(distanceKm) {
 exports.createOrder = async (req, res, next) => {
   try {
     const { items, addressId } = req.body;
-    const userId = req.user._id;
+    const userId = req.userId;
 
     if (!items || !Array.isArray(items) || items.length === 0) {
       return res.status(400).json({
@@ -87,13 +87,8 @@ exports.createOrder = async (req, res, next) => {
           name: menuItem.name,
           price,
           quantity: item.quantity,
-<<<<<<< Updated upstream
-          total: price * item.quantity,
-          image: menuItem.images?.[0]?.url || null,
-=======
           total,
           // image: menuItem.images?.[0]?.url || "",
->>>>>>> Stashed changes
         });
       }
 
@@ -177,7 +172,7 @@ exports.createOrder = async (req, res, next) => {
 };
 exports.getMyOrders = async (req, res, next) => {
   try {
-    const orders = await Order.find({ user: req.user.id })
+    const orders = await Order.find({ user: req.userId })
       .populate("items.menuItem", "name basePrice images")
       .populate("items.combo", "name price image")
       .sort({ createdAt: -1 })
@@ -187,7 +182,7 @@ exports.getMyOrders = async (req, res, next) => {
 
     const reviews = await Review.find({
       order: { $in: orderIds },
-      user: req.user.id,
+      user: req.userId,
     }).lean();
 
     const reviewMap = {};
@@ -213,18 +208,11 @@ exports.getOrderById = async (req, res, next) => {
   try {
     const id = req.params.id;
 
-<<<<<<< Updated upstream
-    const order = await Order.findById(id)
-=======
     const isMongoId = /^[0-9a-fA-F]{24}$/.test(id);
 
     const order = await Order.findOne(isMongoId ? { _id: id } : { orderId: id })
->>>>>>> Stashed changes
       .populate("items.menuItem", "name basePrice images")
       .populate("items.combo", "name price image");
-
-      console.log("user ", req.user)
-      console.log("order", order)
 
     if (!order) {
       return res.status(404).json({
@@ -233,7 +221,7 @@ exports.getOrderById = async (req, res, next) => {
       });
     }
 
-    if (!req.user || order.user.toString() !== req.user.id) {
+    if (!req.userId || order.user.toString() !== req.userId) {
       return res.status(403).json({
         success: false,
         message: "Not authorized",
@@ -269,7 +257,7 @@ exports.cancelOrder = async (req, res, next) => {
       });
     }
 
-    if (order.user.toString() !== req.user.id) {
+    if (order.user.toString() !== req.userId) {
       return res.status(403).json({
         success: false,
         message: "Not authorized to cancel this order",
@@ -329,7 +317,7 @@ exports.updateOrderStatus = async (req, res, next) => {
         message: "Order not found",
       });
     }
-    if (order.user.toString() !== req.user.id) {
+    if (order.user.toString() !== req.userId) {
       return res.status(403).json({
         success: false,
         message: "Not authorized",

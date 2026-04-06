@@ -169,6 +169,7 @@ async function placeOrder(phone, paymentMethod) {
     },
     payment: { method: paymentMethod, status: paymentMethod === "ONLINE" ? "paid" : "pending" },
     status: "pending",
+    source: "whatsapp",
   });
 
   // Clear Session Data after order

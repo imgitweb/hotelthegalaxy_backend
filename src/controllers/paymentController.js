@@ -7,7 +7,7 @@ const Address = require("../models/User/address");
 exports.createOrder = async (req, res, next) => {
   try {
     const { items, addressId, noContact, total } = req.body;
-    const userId = req.user.id;
+    const userId = req.userId;
 
     if (!items || items.length === 0) {
       return res.status(400).json({

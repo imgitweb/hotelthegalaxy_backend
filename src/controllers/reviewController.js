@@ -44,7 +44,7 @@ exports.createReview = async (req, res, next) => {
     const operations = reviews.map((r) => ({
       updateOne: {
         filter: {
-          user: req.user.id,
+          user: req.userId,
           order,
           menuItem: r.menuItem,
         },
@@ -75,7 +75,7 @@ exports.getReviewByOrder = async (req, res, next) => {
 
     const reviews = await Review.find({
       order: orderId,
-      user: req.user.id,
+      user: req.userId,
     })
       .populate("menuItem", "name")
       .lean();

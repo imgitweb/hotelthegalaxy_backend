@@ -37,6 +37,7 @@ const settingRoutes = require("./routes/settingRoutes")
 const offerRoutepublic = require("./routes/public/offers.routes");
 const dashboardRoutes = require("./routes/admin/dashboardRoutes");
 const riderRoutes = require("./routes/admin/rider.routes");
+const riderAuthRoutes = require("./routes/riderRoutes");
 const staffRoutes = require("./routes/admin/staffRoutes");
 const roomRoutes = require("./routes/roomRoutes");
 const path = require("path");
@@ -95,6 +96,7 @@ console.log(
 );
 
 app.use("/api/v1/auth", authRoutes);
+app.use("/api/v1/auth/rider", riderAuthRoutes);
 app.use("/api/v1/admin", adminRoutes);
 app.use("/api/v1/files", fileRoutes);
 app.use("/api/v1/menu", publicMenuRoutes);
