@@ -8,18 +8,17 @@ const Payment = require("../../models/paymentModel");
 const Offer = require("../../models/Offer");
 const DailyRoster = require("../../models/dining/DailyRoster"); 
 const razorpay = require("../../config/razorpay"); 
+const SubCategory = require("../../models/dining/SubCategory"); // Added SubCategory model
+
 const mongoose = require("mongoose");
 
-// 1. Check if user exists
 async function checkUserExists(phone) {
   return await User.findOne({ phone });
 }
 
-// 2. Register user with exact schema requirements
 async function registerNewUser(phone, fullName) {
-  
   return await User.create({ 
-    phone:phone, 
+    phone: phone, 
     role: "customer", 
     fullName: fullName || "Guest",
     authProvider: "whatsapp",
@@ -27,14 +26,12 @@ async function registerNewUser(phone, fullName) {
   });
 }
 
-// 3. Session Management
 async function getOrCreateSession(phone) {
   let session = await Session.findOne({ phone });
   if (!session) session = await Session.create({ phone, cart: [] });
   return session;
 }
 
-// 4. Check for Active Orders
 async function getActiveOrder(userId) {
   return await Order.findOne({ 
     user: userId, 
@@ -42,43 +39,58 @@ async function getActiveOrder(userId) {
   }).sort({ createdAt: -1 }).lean();
 }
 
-// 5. Get Categories
 async function getCategories() {
   return await Category.find({ isActive: true }).lean();
 }
 
-// 🔥 FIXED: Aapke schema ke hisaab se getTodayRosterItems update kiya
 async function getTodayRosterItems() {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
   
-  // Aapke schema mein field ka naam "id" hai, toh usko populate karenge
   const roster = await DailyRoster.findOne({
     date: { $gte: today, $lt: new Date(today.getTime() + 24 * 60 * 60 * 1000) }
   }).populate("items.id"); 
 
   if (!roster || !roster.items) return [];
 
-  // Aapke schema mein available quantity ka naam "quantity" hai
   return roster.items
-    .filter(item => item.id && item.quantity > 0) // item.id null na ho aur quantity > 0 ho
+    .filter(item => item.id && item.quantity > 0)
     .map(item => ({
-      _id: item.id._id,           // Populated MenuItem ki _id
-      name: item.id.name,         // Populated MenuItem ka name
-      basePrice: item.id.basePrice, // Populated MenuItem ki price
-      category: item.id.category,   // Populated MenuItem ki category
-      maxAllowed: item.quantity,    // Aapke schema se limit
+      _id: item.id._id,          
+      name: item.id.name,        
+      basePrice: item.id.basePrice, 
+      category: item.id.category,   
+      maxAllowed: item.quantity,    
       availableNow: item.quantity
     }));
 }
 
-// 6. Fetch Items by Category
+// 🔥 NAYA ROBUST LOGIC: Category -> SubCategory -> MenuItem -> Match with Daily Roster
 async function getMenuByCategory(categoryId) {
-  const rosterItems = await getTodayRosterItems();
-  return rosterItems.filter(item => String(item.category) === String(categoryId));
+  try {
+    // 1. Pehle is category ki saari SubCategories nikaalo
+    const subCategories = await SubCategory.find({ category: categoryId }).lean();
+    const subCategoryIds = subCategories.map(sc => String(sc._id));
+
+    if (subCategoryIds.length === 0) return []; // Agar koi subcategory nahi hai, toh khali array return karo
+
+    // 2. Ab in SubCategories ki IDs se jude saare Menu Items nikaalo
+    const menuItems = await MenuItem.find({ subCategory: { $in: subCategoryIds } }).lean();
+    const menuItemIds = menuItems.map(item => String(item._id));
+
+    if (menuItemIds.length === 0) return []; // Agar menu items nahi hain, toh khali array
+
+    // 3. Aaj ka Daily Roster nikalo
+    const rosterItems = await getTodayRosterItems();
+
+    // 4. Roster mein se sirf wo items rakho jo humare menuItemIds mein maujood hain
+    return rosterItems.filter(rosterItem => menuItemIds.includes(String(rosterItem._id)));
+  } catch (error) {
+    console.error("Error in getMenuByCategory:", error);
+    return [];
+  }
 }
 
-// 7. Address Management
 async function getUserAddresses(userId) {
   return await Address.find({ user: userId })
     .select("_id street landmark label")
@@ -114,7 +126,6 @@ async function saveNewAddress(userId, addressData) {
   }
 }
 
-// 8. Cart Operations
 async function addItemsToCart(phone, items) {
   const session = await getOrCreateSession(phone);
   const rosterItems = await getTodayRosterItems();
@@ -197,7 +208,6 @@ async function removeItemsFromCart(phone, items) {
   return session.cart;
 }
 
-// 9. Orders & Payments Logic
 async function placeOrder(phone, paymentMethod) {
   let user = await checkUserExists(phone);
   if (!user) user = await registerNewUser(phone, "Guest"); 
@@ -249,7 +259,6 @@ async function cancelOrder(userId) {
 async function getUserOrderStats(userId) {
   try {
     const orders = await Order.find({ user: userId });
-    
     let totalOrders = orders.length;
     let deliveredOrders = 0;
     let cancelledOrders = 0;
@@ -313,7 +322,7 @@ async function processBotOrderAndPayment(userId, phone, cartItems, addressId) {
       amount: Math.round(totalAmount * 100), 
       currency: "INR",
       accept_partial: false,
-      description: "Royal Hotel Feast Order",
+      description: "Galaxy Hotel Feast Order",
       customer: { contact: phone },
       notify: { sms: false, email: false },
       reminder_enable: true,

@@ -5,11 +5,12 @@ const { z } = require("zod");
 
 const {
   checkUserExists, registerNewUser, getOrCreateSession, getActiveOrder,
-  getTodayRosterItems, getUserAddresses, getUserOrderStats,
+  getTodayRosterItems, getUserAddresses, getUserOrderStats, getCategories, getMenuByCategory,
   saveNewAddress, addItemsToCart, placeOrder, cancelOrder, removeItemsFromCart, 
   processBotOrderAndPayment, checkLatestPaymentStatus
 } = require("../tools/orderTools");
 
+// 🔥 Context Memory
 const userContextMemory = {}; 
 const paymentAttemptsMemory = {}; 
 
@@ -21,25 +22,17 @@ const llm = new ChatOpenAI({
 
 const IntentSchema = z.object({
   intent: z.enum([
-    "GREETING", "SHOW_MENU", "ADD_TO_CART", "REMOVE_FROM_CART", 
-    "CHECKOUT", "PROVIDE_ADDRESS", "SELECT_SAVED_ADDRESS", "PROVIDE_NAME", 
-    "INITIATE_RAZORPAY_PAYMENT", "COMPLETE_ORDER", "TRACK_ORDER", "ORDER_STATS", 
+    "GREETING", "SHOW_MENU", "SELECT_CATEGORY", "ADD_TO_CART", "REMOVE_FROM_CART", 
+    "CHECKOUT", "PROVIDE_ADDRESS", "SELECT_SAVED_ADDRESS", "PROMPT_NEW_ADDRESS", "PROVIDE_NAME", 
+    "COMPLETE_ORDER", "TRACK_ORDER", "ORDER_STATS", 
     "CANCEL_ORDER", "HELP", "GENERAL_INFO", "UNKNOWN" 
   ]).describe("Identify the core intent based on user input and the previous bot message context."),
   
-  user_name: z.string().nullable().describe("Extract the user's name if they are providing it."),
-  
-  extracted_items: z.array(z.object({
-    name: z.string(),
-    quantity: z.number()
-  })).nullable().describe("Extract food items and quantities. If none, return empty array."),
-  
-  address: z.object({
-    area: z.string().describe("Extract the main street, area, or flat details"),
-    landmark: z.string().describe("Extract the landmark if provided")
-  }).nullable(),
-
-  address_index: z.number().nullable()
+  user_name: z.string().nullable(),
+  extracted_items: z.array(z.object({ name: z.string(), quantity: z.number() })).nullable().describe("Extract food items and quantities. If user names food without quantity, assume 1."),
+  address: z.object({ area: z.string(), landmark: z.string() }).nullable(),
+  address_index: z.number().nullable().describe("If user replies with a number to select an address"),
+  category_name: z.string().nullable().describe("Extract the category name like 'Thali', 'Soup', 'Dal', 'Rice', 'Chinese' if user types it.")
 });
 
 const aiBrain = llm.withStructuredOutput(IntentSchema, { strict: true });
@@ -47,54 +40,58 @@ const aiBrain = llm.withStructuredOutput(IntentSchema, { strict: true });
 async function agentDecisionNode(state) {
   const msg = (state.inputText || "").trim().toLowerCase();
   const phone = state.phone;
-  
   const previousBotMessage = userContextMemory[phone] || "None";
-  console.log(`🧐 Memory Context for ${phone}:`, previousBotMessage.substring(0, 60).replace(/\n/g, ' ') + "...");
+  
+  console.log(`🧐 Memory Context for ${phone}:`, previousBotMessage.substring(0, 80).replace(/\n/g, ' ') + "...");
 
-  if (msg.includes("address") || msg.includes("location") || msg.includes("phone") || msg.includes("contact") || msg.includes("where")) {
-    return { ...state, aiIntent: "GENERAL_INFO", aiData: {} };
+  // 🔥 1. CONTEXT AWARE INTERCEPTS
+  const isAskingAddress = previousBotMessage.toLowerCase().includes("where shall we dispatch") || previousBotMessage.toLowerCase().includes("where to dispatch");
+  
+  if (isAskingAddress) {
+    if (msg === "home" || msg.includes("home") || msg === "1") {
+      return { ...state, aiIntent: "SELECT_SAVED_ADDRESS", aiData: { address_index: 1 } };
+    }
+    if (msg.includes("add new") || msg === "2" || msg === "3" || msg === "btn_new_address") {
+      return { ...state, aiIntent: "PROMPT_NEW_ADDRESS", aiData: {} };
+    }
   }
 
-  if (previousBotMessage.includes("Welcome to The Galaxy Hotel") || previousBotMessage.includes("How may I humbly serve you")) {
-    if (msg === "1" || msg.includes("menu")) return { ...state, aiIntent: "SHOW_MENU", aiData: {} };
-    if (msg === "2" || msg.includes("track")) return { ...state, aiIntent: "TRACK_ORDER", aiData: {} };
-    if (msg === "3" || msg.includes("help")) return { ...state, aiIntent: "HELP", aiData: {} };
+  // 🔥 2. FAST ROUTING
+  if (msg.startsWith("cat_")) {
+    return { ...state, aiIntent: "SELECT_CATEGORY", aiData: { categoryId: msg.replace("cat_", "") } };
+  }
+  if (msg.startsWith("addr_")) {
+    return { ...state, aiIntent: "SELECT_SAVED_ADDRESS", aiData: { addressId: msg.replace("addr_", "") } };
   }
 
-  if (msg.includes("stats") || msg.includes("history") || msg.includes("kitne ka order") || msg.includes("purane order")) {
-    return { ...state, aiIntent: "ORDER_STATS", aiData: {} };
-  }
+  if (msg === "btn_menu" || msg === "menu") return { ...state, aiIntent: "SHOW_MENU", aiData: {} };
+  if (msg === "btn_track" || msg === "track") return { ...state, aiIntent: "TRACK_ORDER", aiData: {} };
+  if (msg === "btn_help" || msg === "help") return { ...state, aiIntent: "HELP", aiData: {} };
+  if (msg === "btn_checkout" || msg === "checkout") return { ...state, aiIntent: "CHECKOUT", aiData: {} };
+  if (msg === "btn_add_more" || msg === "add more") return { ...state, aiIntent: "SHOW_MENU", aiData: {} };
+  if (msg === "btn_cancel_order") return { ...state, aiIntent: "CANCEL_ORDER", aiData: {} };
 
-  if (previousBotMessage.includes("What is your next command?") || previousBotMessage.includes("Your Updated Cart")) {
-    if (msg === "1" || msg.includes("add") || msg.includes("menu")) return { ...state, aiIntent: "SHOW_MENU", aiData: {} };
-    if (msg === "2" || msg.includes("checkout")) return { ...state, aiIntent: "CHECKOUT", aiData: {} };
-  }
+  // Normal Greetings Check 
+  if (["hi", "hello", "start", "hy"].includes(msg)) return { ...state, aiIntent: "GREETING", aiData: {} };
+  if (msg === "home" && !isAskingAddress) return { ...state, aiIntent: "GREETING", aiData: {} };
+  
+  if (msg.includes("stats") || msg.includes("history")) return { ...state, aiIntent: "ORDER_STATS", aiData: {} };
 
-  // 🔥 FAST ROUTING for Address Selection (Checks if user entered 1, 2, or 3)
-  if (previousBotMessage.includes("Where shall we dispatch")) {
-    const num = parseInt(msg);
-    if (!isNaN(num) && msg.length <= 1) return { ...state, aiIntent: "SELECT_SAVED_ADDRESS", aiData: { address_index: num, intent: "SELECT_SAVED_ADDRESS" } };
-  }
-
-  if (["hi", "hello", "start", "home"].includes(msg)) return { ...state, aiIntent: "GREETING", aiData: {} };
-  if (["checkout", "pay", "done", "paid"].includes(msg)) return { ...state, aiIntent: "COMPLETE_ORDER", aiData: {} }; 
-
-  // 🔥 UPDATED PROMPT: Added logic so AI correctly handles new address input
+  // 🔥 3. LLM Processing (Bulletproof Rules)
   const prompt = `
-    You are an intelligent order routing AI for "The Galaxy Hotel". 
-    Read the 'BOT_LAST_MESSAGE' and the 'USER_REPLY'. Compare them to understand what the user wants to do.
+    You are an intelligent order routing AI for "The Galaxy Hotel".
+    CRITICAL INSTRUCTION: Read the 'BOT_LAST_MESSAGE' to understand what the user is replying to.
 
     === CONTEXT ===
     BOT_LAST_MESSAGE: """${previousBotMessage}"""
     USER_REPLY: """${state.inputText}"""
     
-    === DECISION RULES & MAPPING (CRITICAL) ===
-    1. ADD/REMOVE ITEMS: If user types food names -> intent "ADD_TO_CART". If "remove" -> intent "REMOVE_FROM_CART".
-    2. NEW ADDRESS: If BOT_LAST_MESSAGE asks for a new address (like "Add a NEW Address", "Where shall we dispatch", or "Please provide your delivery address") AND the user provides text (not a single digit), -> Intent is "PROVIDE_ADDRESS". Extract the 'area' and 'landmark'.
-    3. COMPLETE ORDER: If BOT_LAST_MESSAGE gave a Razorpay payment link and asked to reply "Paid" -> USER_REPLY "paid", "done", "yes" = "COMPLETE_ORDER".
-    4. ONBOARDING: If BOT_LAST_MESSAGE asks for the user's name -> intent "PROVIDE_NAME".
-    5. ORDER STATS: If user asks about their "history" -> intent "ORDER_STATS".
-    6. MENU: If user asks for menu or wants to order something -> intent "SHOW_MENU".
+    === STRICT DECISION RULES ===
+    1. CATEGORY BROWSE (CRITICAL): If USER_REPLY is a food category (like "Thali", "Soup", "Dal", "Starter", "Main Course", "Rice", "Chinese") WITHOUT a quantity -> intent MUST be "SELECT_CATEGORY" and extract 'category_name'. NEVER return SHOW_MENU for this.
+    2. ADDRESS SELECTION: If BOT_LAST_MESSAGE asks "Where shall we dispatch", ANY address detail typed means "PROVIDE_ADDRESS". NEVER return GREETING.
+    3. ADD TO CART: ONLY trigger "ADD_TO_CART" if the user explicitly types a FOOD ITEM to order (e.g., "1 Thali", "add paneer", "Veg Diwani Handi"). If quantity is missing, assume 1.
+    4. COMPLETE ORDER: If BOT_LAST_MESSAGE contains "Razorpay" AND USER_REPLY means "done", "paid", or "yes" -> intent "COMPLETE_ORDER".
+    5. ONBOARDING: If BOT_LAST_MESSAGE asks for the user's name -> intent "PROVIDE_NAME".
   `;
 
   try {
@@ -108,41 +105,285 @@ async function agentDecisionNode(state) {
 
 async function actionExecutionNode(state) {
   const { aiIntent, aiData, phone, inputText } = state;
-  
   let user = await checkUserExists(phone);
 
   if (!user && aiIntent !== "PROVIDE_NAME" && aiIntent !== "GENERAL_INFO") {
     let replyText = "👑 *Welcome to The Galaxy Hotel!*\n\nIt is an absolute honor to receive you. As this is your first visit, may I humbly know your good name so I can address you properly?";
     userContextMemory[phone] = replyText;
-    return { ...state, replyText };
+    return { ...state, replyText, interactive: null };
   }
 
   const session = await getOrCreateSession(phone); 
   let replyText = "";
+  let interactive = null; 
 
   switch (aiIntent) {
     
-    case "GENERAL_INFO": {
-      replyText = `🏨 *The Galaxy Hotel*\n\n📍 *Address:* PG College Road, Lalbagh, Chhindwara\n📞 *Contact:* +91 6262633305\n📧 *Email:* gmhotelthegalaxy@gmail.com\n\nReply *1* to view today's special menu or order a feast!`;
-      break;
-    }
-
     case "PROVIDE_NAME": {
       const extractedName = aiData?.user_name || inputText.trim() || "Guest";
+      if (!user) user = await registerNewUser(phone, extractedName);
       
-      if (!user) {
-         user = await registerNewUser(phone, extractedName);
-      }
-      
-      replyText = `Splendid to meet you, *${user.fullName}*! 👑\n\nHow may I humbly serve you today, esteemed guest?\n\nReply with a number:\n*1.* 🍔 Order a Feast (Menu)\n*3.* ℹ️ Seek My Assistance (Help)\n\n*(You can also ask me for our address or contact info!)*`;
+      replyText = `Splendid to meet you, *${user.fullName}*! 👑\n\nHow may I humbly serve you today?`;
+      interactive = {
+        type: "button",
+        body: { text: replyText },
+        action: {
+          buttons: [
+            { type: "reply", reply: { id: "btn_menu", title: "🍔 Order Menu" } },
+            { type: "reply", reply: { id: "btn_help", title: "ℹ️ Help" } }
+          ]
+        }
+      };
       break;
     }
 
     case "GREETING": {
       const hasActiveOrder = await getActiveOrder(user._id);
-      replyText = `👑 *Welcome back, ${user.fullName}!*\n\nHow may I humbly serve you today?\n\nReply with a number:\n*1.* 🍔 Order a Feast (Menu)`;
-      if (hasActiveOrder) replyText += `\n*2.* 📦 Track Your Royal Order`;
-      replyText += `\n*3.* ℹ️ Seek My Assistance (Help)\n\n*(Type "Stats" to view your royal history or ask for our Location)*`;
+      replyText = `👑 *Welcome back, ${user.fullName}!*\n\nHow may I humbly serve you today?`;
+      
+      let buttons = [{ type: "reply", reply: { id: "btn_menu", title: "🍔 Order Menu" } }];
+      if (hasActiveOrder) {
+        buttons.push({ type: "reply", reply: { id: "btn_track", title: "📦 Track Order" } });
+      }
+      buttons.push({ type: "reply", reply: { id: "btn_help", title: "ℹ️ Help" } });
+
+      interactive = {
+        type: "button",
+        body: { text: replyText },
+        action: { buttons }
+      };
+      break;
+    }
+
+    case "HELP": {
+      replyText = `🎧 *The Galaxy Hotel Support*\n\n📞 Call us: +916262633305\n📧 gmhotelthegalaxy@gmail.com\n\n(Tap the number above to call us directly!)`;
+      interactive = {
+        type: "button",
+        body: { text: replyText },
+        action: { buttons: [{ type: "reply", reply: { id: "btn_menu", title: "🍔 Back to Menu" } }] }
+      };
+      break;
+    }
+
+    case "SHOW_MENU": {
+      const categories = await getCategories();
+      if (!categories || categories.length === 0) {
+        replyText = "Our chefs are preparing today's royal menu. Please check back shortly!";
+        break;
+      }
+
+      const rows = categories.slice(0, 10).map(cat => ({
+        id: `cat_${cat._id}`,
+        title: cat.name.substring(0, 24),
+        description: "Tap to view delicacies"
+      }));
+
+      interactive = {
+        type: "list",
+        header: { type: "text", text: "🍽️ The Galaxy Menu" },
+        body: { text: "Tap the button below to view all our categories 👇" },
+        action: {
+          button: "📋 View Categories",
+          sections: [{ title: "Our Offerings", rows: rows }]
+        }
+      };
+      break;
+    }
+
+    case "SELECT_CATEGORY": {
+      let categoryId = aiData?.categoryId;
+      let categoryItems = [];
+      let categoryName = aiData?.category_name || inputText;
+
+      // Agar ID nahi mili par text mein naam hai, toh DB mein dhundho
+      if (!categoryId && categoryName) {
+        const searchName = categoryName.toLowerCase().trim();
+        const categories = await getCategories();
+        const matchedCat = categories.find(c => 
+           c.name.toLowerCase() === searchName || 
+           c.name.toLowerCase().includes(searchName) || 
+           searchName.includes(c.name.toLowerCase())
+        );
+        
+        if (matchedCat) {
+          categoryId = matchedCat._id;
+          categoryName = matchedCat.name; 
+        }
+      }
+
+      // Naya Logic call (from updated orderTools.js)
+      if (categoryId) {
+        categoryItems = await getMenuByCategory(categoryId);
+      }
+
+      if (!categoryItems || categoryItems.length === 0) {
+        replyText = `Maaf kijiyega, aaj *${categoryName || "is category"}* mein koi item available nahi hai. 👨‍🍳`;
+        interactive = {
+          type: "button",
+          body: { text: replyText },
+          action: { buttons: [{ type: "reply", reply: { id: "btn_menu", title: "🍔 View All Menu" } }] }
+        };
+      } else {
+        const menuText = categoryItems.map(m => `▪️ *${m.name}* - ₹${m.basePrice}`).join("\n");
+        replyText = `📜 *${categoryName || 'Selected'} Delicacies*\n\n${menuText}\n\n👉 *Aapko kya order karna hai? (Jaise: '1 ${categoryItems[0].name}')*`;
+      }
+      break;
+    }
+
+    case "ADD_TO_CART": {
+      const itemsToAdd = aiData?.extracted_items || [];
+      if (itemsToAdd.length === 0) {
+        replyText = "Please specify the exact item and quantity you wish to add.";
+      } else {
+        const { cart, messages } = await addItemsToCart(phone, itemsToAdd);
+        
+        let cartSummary = cart.map(item => `▪️ ${item.quantity}x ${item.name} - ₹${item.total}`).join("\n");
+        let subtotal = cart.reduce((sum, item) => sum + item.total, 0);
+        let feedbackString = messages.join("\n"); 
+        
+        replyText = `${feedbackString}\n\n🛒 *Your Banquet So Far:*\n${cartSummary}\n💰 *Current Total: ₹${subtotal}*\n\nWhat is your next command?`;
+        
+        interactive = {
+          type: "button",
+          body: { text: replyText },
+          action: {
+            buttons: [
+              { type: "reply", reply: { id: "btn_add_more", title: "➕ Add More" } },
+              { type: "reply", reply: { id: "btn_checkout", title: "➡️ Checkout" } }
+            ]
+          }
+        };
+      }
+      break;
+    }
+
+    case "CHECKOUT": {
+      const addresses = await getUserAddresses(user._id);
+      
+      if (addresses && addresses.length > 0) {
+        const topAddresses = addresses.slice(0, 2); 
+        
+        let buttons = topAddresses.map((addr, idx) => ({
+          type: "reply",
+          reply: { id: `addr_${addr._id}`, title: addr.label || `Home` }
+        }));
+        
+        buttons.push({ type: "reply", reply: { id: "btn_new_address", title: "➕ Add NEW" } });
+
+        let addressDetails = topAddresses.map((addr, idx) => 
+          `*${idx + 1}. ${addr.label || "Home"}*: ${addr.street}, ${addr.landmark}`
+        ).join("\n");
+        
+        addressDetails += `\n*${topAddresses.length + 1}.* ➕ Add a NEW Address`;
+
+        interactive = {
+          type: "button",
+          body: { text: `📍 *Where shall we dispatch your royal feast?*\n\n${addressDetails}\n\nTap a button below or reply with a number to select:` },
+          action: { buttons }
+        };
+      } else {
+        replyText = "🏠 *New Address*\n\n👉 Please provide your delivery address in this format:\n\nArea: 007, 8th floor bansal one\nLandmark: DB Mall";
+      }
+      break;
+    }
+
+    case "PROMPT_NEW_ADDRESS": {
+      replyText = "🏠 *New Address*\n\n👉 Please provide your delivery address in this format:\n\nArea: 007, 8th floor bansal one\nLandmark: DB Mall";
+      break;
+    }
+
+    case "SELECT_SAVED_ADDRESS": {
+      let addressId = aiData?.addressId; 
+      
+      if (!addressId) {
+        const savedAddresses = await getUserAddresses(user._id);
+        const topAddresses = savedAddresses.slice(0, 2);
+        let selectedIdx = (aiData?.address_index || 1) - 1;
+
+        if (inputText.toLowerCase().includes("home")) {
+          selectedIdx = 0; 
+        }
+
+        if (selectedIdx >= 0 && selectedIdx < topAddresses.length) {
+          addressId = topAddresses[selectedIdx]._id.toString();
+        } else {
+          replyText = "🏠 *New Address*\n\n👉 Please provide your delivery address in this format:\n\nArea: 007, 8th floor bansal one\nLandmark: DB Mall";
+          userContextMemory[phone] = replyText;
+          return { ...state, replyText, interactive: null }; 
+        }
+      }
+
+      session.addressId = addressId;
+      await session.save();
+      
+      const cartItems = session.cart || [];
+      if(cartItems.length === 0) {
+         replyText = "Your cart is empty. Please open the Menu to add items.";
+         break;
+      }
+
+      const paymentData = await processBotOrderAndPayment(user._id, phone, cartItems, addressId);
+      if (paymentData.success) {
+        paymentAttemptsMemory[phone] = 0; 
+        const selectedAddr = await getUserAddresses(user._id).then(addrs => addrs.find(a => a._id.toString() === addressId));
+        
+        replyText = `✅ *Address Confirmed:* ${selectedAddr?.street || 'Home'}\n\n💳 *Online Royal Treasury*\nGrand Total: *₹${paymentData.totalAmount.toFixed(2)}*\n\n*(Aapka order auto-confirm ho jayega payment successful hote hi! Type "paid" once done)*`;
+        
+        interactive = {
+          type: "cta_url",
+          body: { text: replyText },
+          action: {
+            name: "cta_url",
+            parameters: {
+              display_text: `Pay ₹${paymentData.totalAmount.toFixed(2)}`,
+              url: paymentData.paymentUrl
+            }
+          }
+        };
+        
+        session.cart = []; 
+        await session.save();
+      } else {
+        replyText = "Apologies, there was an issue generating your payment link. Please try again.";
+      }
+      break;
+    }
+
+    case "PROVIDE_ADDRESS": {
+      const extractedAddress = aiData?.address || { area: inputText, landmark: "" };
+      const newAddr = await saveNewAddress(user._id, extractedAddress);
+      session.addressId = newAddr._id;
+      await session.save();
+
+      const cartItems = session.cart || [];
+      if(cartItems.length === 0) {
+         replyText = "Your cart is empty. Please open the Menu to add items.";
+         break;
+      }
+
+      const paymentData = await processBotOrderAndPayment(user._id, phone, cartItems, newAddr._id);
+      if (paymentData.success) {
+        paymentAttemptsMemory[phone] = 0; 
+        
+        replyText = `✅ *New Address Saved:* ${newAddr.street}\n\n💳 *Online Royal Treasury*\nGrand Total: *₹${paymentData.totalAmount.toFixed(2)}*\n\n*(Aapka order auto-confirm ho jayega payment successful hote hi! Type "paid" once done)*`;
+        
+        interactive = {
+          type: "cta_url",
+          body: { text: replyText },
+          action: {
+            name: "cta_url",
+            parameters: {
+              display_text: `Pay ₹${paymentData.totalAmount.toFixed(2)}`,
+              url: paymentData.paymentUrl
+            }
+          }
+        };
+        
+        session.cart = []; 
+        await session.save();
+      } else {
+        replyText = "Apologies, there was an issue generating your payment link. Please try again.";
+      }
       break;
     }
 
@@ -152,25 +393,34 @@ async function actionExecutionNode(state) {
         const orderStatus = orderToTrack.status ? orderToTrack.status.toLowerCase() : "processing";
         const amount = orderToTrack.totalAmount || orderToTrack.pricing?.total || 0;
         
-        replyText = `📦 *Your Active Order*\n\n🔖 Order ID: ${orderToTrack.orderNumber || orderToTrack._id}\n📊 Status: *${orderStatus.toUpperCase()}*\n💰 Amount: ₹${amount.toFixed(2)}`;
+        replyText = `📦 *Your Active Order*\n\n🔖 Order ID: ${orderToTrack.orderNumber || orderToTrack._id}\n📊 Status: *${orderStatus.toUpperCase()}*\n💰 Amount: ₹${amount.toFixed(2)}\n\n`;
         
-        if (orderToTrack.deliveryBoy && orderToTrack.deliveryBoy.phone) {
-          replyText += `\n\n🛵 *Your Chariot Arrives:*\nRider: ${orderToTrack.deliveryBoy.name || "Executive"}\n📞 Contact: ${orderToTrack.deliveryBoy.phone}`;
+        if (["dispatched", "out_for_delivery"].includes(orderStatus) && orderToTrack.deliveryBoy) {
+          replyText += `🛵 *Your Order is Arriving!*\nRider: ${orderToTrack.deliveryBoy.name || "Executive"}\n📞 Contact: ${orderToTrack.deliveryBoy.phone}\n\n`;
         } else {
-          replyText += `\n\n👨‍🍳 Our royal chefs are presently crafting your meal.`;
+          replyText += `👨‍🍳 Our royal chefs are presently crafting your meal.\n\n`;
         }
-
-        replyText += `\n\nWhat would you like to do?\n*1.* 🍔 Order More Delights`;
 
         const uncancelableStatuses = ["confirmed", "preparing", "dispatched", "out_for_delivery", "delivered"];
+        let buttons = [{ type: "reply", reply: { id: "btn_add_more", title: "🍔 Order More" } }];
         
         if (!uncancelableStatuses.includes(orderStatus)) {
-            replyText += `\n*2.* ❌ Cancel Order`;
-        } else {
-            replyText += `\n\n*(Note: Your order is already ${orderStatus.toUpperCase()}, so it cannot be cancelled now)*`;
+            buttons.push({ type: "reply", reply: { id: "btn_cancel_order", title: "❌ Cancel Order" } });
         }
+
+        interactive = {
+          type: "button",
+          body: { text: replyText },
+          action: { buttons }
+        };
+
       } else {
-        replyText = "Forgive me, my lord, but I do not see any active orders for you at this moment.\n\nReply *1* to browse the royal menu, or type *Stats* to see your order history.";
+        replyText = "Forgive me, but I do not see any active orders for you at this moment.";
+        interactive = {
+          type: "button",
+          body: { text: replyText },
+          action: { buttons: [{ type: "reply", reply: { id: "btn_menu", title: "🍔 Order Menu" } }] }
+        };
       }
       break;
     }
@@ -178,166 +428,15 @@ async function actionExecutionNode(state) {
     case "CANCEL_ORDER": {
       const cancelledOrder = await cancelOrder(user._id);
       if (cancelledOrder) {
-        replyText = `✅ *Order Cancelled Successfully*\n\nAs you command, your order has been halted.\n\nReply *1* whenever you wish to order again.`;
+        replyText = `✅ *Order Cancelled Successfully*\n\nAs you command, your order has been halted.`;
       } else {
-        replyText = `❌ *Cannot Cancel Order*\n\nI humbly apologize, but you either have no active order, or it has been confirmed and progressed too far to be cancelled now.\n\nReply *1* to browse the menu.`;
+        replyText = `❌ *Cannot Cancel Order*\n\nI humbly apologize, but you either have no active order, or it has progressed too far to be cancelled now.`;
       }
-      break;
-    }
-
-    case "ORDER_STATS": {
-      const stats = await getUserOrderStats(user._id);
-      
-      if (stats && stats.totalOrders > 0) {
-        replyText = `📜 *Your Royal History, ${user.fullName}*\n\n🛍️ Total Orders Placed: *${stats.totalOrders}*\n✅ Successfully Delivered: *${stats.deliveredOrders}*\n❌ Cancelled Orders: *${stats.cancelledOrders}*\n\n💎 Total Treasure Spent: *₹${stats.totalSpent.toFixed(2)}*\n\nReply *1* whenever you wish to order again!`;
-      } else {
-        replyText = "You have not yet graced us with a completed order, my lord.\n\nReply *1* to explore our feasts and begin your royal journey.";
-      }
-      break;
-    }
-
-    case "HELP": {
-      replyText = `🎧 *The Galaxy Hotel Servants at Your Beck & Call*\n\n📞 +91 6262633305\n📧 gmhotelthegalaxy@gmail.com\n\nReply *1* to behold the menu.`;
-      break;
-    }
-
-    case "SHOW_MENU": {
-      const items = await getTodayRosterItems();
-      
-      if (!items || items.length === 0) {
-        replyText = "I am terribly sorry, my lord, but today's royal roster is currently empty. Our chefs are preparing the list. Pray, check back in a short while.";
-      } else {
-        const menuText = items.map((m, i) => `▪️ *${m.name}* - ₹${m.basePrice} _(Max limit: ${m.maxAllowed})_`).join("\n");
-        replyText = `📜 *Today's Royal Feast Selection*\n\n${menuText}\n\n👉 *Please type what you desire to add to your cart (e.g., '2 ${items[0]?.name || "items"}')*`;
-      }
-      break;
-    }
-
-    case "ADD_TO_CART": {
-      const itemsToAdd = aiData?.extracted_items || [];
-      if (itemsToAdd.length === 0) {
-        replyText = "Forgive my simple mind, my lord, but could you please specify the exact item and quantity? (e.g., '1 Pizza').";
-      } else {
-        const { cart, messages } = await addItemsToCart(phone, itemsToAdd);
-        
-        let cartSummary = cart.map(item => `▪️ ${item.quantity}x ${item.name} - ₹${item.total}`).join("\n");
-        let subtotal = cart.reduce((sum, item) => sum + item.total, 0);
-        let feedbackString = messages.join("\n"); 
-        
-        replyText = `${feedbackString}\n\n🛒 *Your Banquet So Far:*\n${cartSummary}\n💰 *Current Total: ₹${subtotal}*\n\nWhat is your next command? Reply with:\n*1.* ➕ Add More Delights\n*2.* ➡️ Proceed to Checkout`;
-      }
-      break;
-    }
-
-    case "REMOVE_FROM_CART": {
-      const itemsToRemove = aiData?.extracted_items || [];
-      if (itemsToRemove.length === 0) {
-        replyText = "My apologies, my lord, please tell me the exact item and quantity you wish me to remove.";
-      } else {
-        const cart = await removeItemsFromCart(phone, itemsToRemove);
-        if (!cart || cart.length === 0) {
-          replyText = `🗑️ As you wish, your cart has been completely emptied.\n\nReply *1* whenever you wish to browse the menu again.`;
-        } else {
-          let cartSummary = cart.map(item => `▪️ ${item.quantity}x ${item.name} - ₹${item.total}`).join("\n");
-          let subtotal = cart.reduce((sum, item) => sum + item.total, 0);
-          replyText = `🗑️ *Item Removed as Commanded!*\n\n🛒 *Your Updated Cart:*\n${cartSummary}\n💰 *New Total: ₹${subtotal}*\n\nWhat is your next command? Reply with:\n*1.* ➕ Add More Items\n*2.* ➡️ Proceed to Checkout`;
-        }
-      }
-      break;
-    }
-
-    // 🔥 UPDATED: Dynamic Address List with "+ Add a NEW Address" option
-    case "CHECKOUT": {
-      const addresses = await getUserAddresses(user._id);
-      
-      let addressPrompt = "📍 *Where shall we dispatch your royal feast?*\n\n";
-      
-      if (addresses && addresses.length > 0) {
-        addressPrompt += "Reply with a number to choose a saved address:\n";
-        const topAddresses = addresses.slice(0, 2); // Show max 2 saved addresses
-        let nextIndex = 1;
-        
-        topAddresses.forEach((addr, index) => {
-          const streetStr = addr.street || "";
-          const landmarkStr = addr.landmark ? `, ${addr.landmark}` : "";
-          addressPrompt += `*${index + 1}.* ${addr.label || "Home"} - ${streetStr}${landmarkStr}\n`;
-          nextIndex = index + 2; // Calculate the next available number
-        });
-        
-        // Add dynamic option for a new address
-        addressPrompt += `\n*${nextIndex}.* ➕ Add a NEW Address\n`;
-      } else {
-        addressPrompt += "👉 *Please provide your delivery address in this exact format:*\n\nArea: 007, 8th floor bansal one\nLandmark: db mall";
-      }
-      
-      replyText = addressPrompt;
-      break;
-    }
-
-    // 🔥 UPDATED: Logic to handle both saved address selection AND the "Add new address" trigger
-    case "SELECT_SAVED_ADDRESS": {
-      const savedAddresses = await getUserAddresses(user._id);
-      const topAddresses = savedAddresses.slice(0, 2); // Same logic as CHECKOUT
-      const index = (aiData?.address_index || 1) - 1; 
-      
-      // Check if user selected the "➕ Add a NEW Address" option
-      if (index === topAddresses.length) {
-         replyText = "🏠 *Add a New Address*\n\nPlease provide your delivery address in this exact format:\n\nArea: 007, 8th floor bansal one\nLandmark: db mall";
-         break;
-      } 
-      // Proceed with saved address
-      else if (topAddresses[index]) {
-         const addressId = topAddresses[index]._id;
-         session.addressId = addressId;
-         await session.save();
-         
-         const cartItems = session.cart || [];
-         if(cartItems.length === 0) {
-            replyText = "Your cart is empty. Please type 'Menu' to add items first.";
-            break;
-         }
-
-         const paymentData = await processBotOrderAndPayment(user._id, phone, cartItems, addressId);
-
-         if (paymentData.success) {
-           paymentAttemptsMemory[phone] = 0; 
-           replyText = `✅ Address confirmed: ${topAddresses[index].street}\n\n💳 *Online Royal Treasury*\nGrand Total: *₹${paymentData.totalAmount.toFixed(2)}*\n\n👉 Please pay securely via Razorpay:\n🔗 ${paymentData.paymentUrl}\n\n*Aapka order auto-confirm ho jayega payment successful hote hi!*`;
-           session.cart = []; 
-           await session.save();
-         } else {
-           replyText = "Apologies, there was an issue generating your payment link. Please try again.";
-         }
-      } else {
-         replyText = "Forgive me, but I do not recognize that choice. Please choose a valid number or type your address directly.";
-      }
-      break;
-    }
-
-    // 🔥 Handles the new address the user types after selecting "Add a NEW Address"
-    case "PROVIDE_ADDRESS": {
-      const extractedAddress = aiData?.address || { area: inputText, landmark: "Not provided" };
-      
-      const newAddr = await saveNewAddress(user._id, extractedAddress);
-      session.addressId = newAddr._id;
-      await session.save();
-
-      const cartItems = session.cart || [];
-      if(cartItems.length === 0) {
-         replyText = "Your cart is empty. Please type 'Menu' to add items first.";
-         break;
-      }
-
-      const paymentData = await processBotOrderAndPayment(user._id, phone, cartItems, newAddr._id);
-
-      if (paymentData.success) {
-        paymentAttemptsMemory[phone] = 0; 
-        const displayLandmark = newAddr.landmark ? `, near ${newAddr.landmark}` : "";
-        replyText = `✅ New address saved: ${newAddr.street}${displayLandmark}\n\n💳 *Online Royal Treasury*\nGrand Total: *₹${paymentData.totalAmount.toFixed(2)}*\n\n👉 Please pay securely via Razorpay:\n🔗 ${paymentData.paymentUrl}\n\n*Aapka order auto-confirm ho jayega payment successful hote hi!*`;
-        session.cart = []; 
-        await session.save();
-      } else {
-        replyText = "Apologies, there was an issue generating your payment link. Please try again.";
-      }
+      interactive = {
+        type: "button",
+        body: { text: replyText },
+        action: { buttons: [{ type: "reply", reply: { id: "btn_menu", title: "🍔 Order Menu" } }] }
+      };
       break;
     }
 
@@ -345,13 +444,23 @@ async function actionExecutionNode(state) {
       const paymentCheck = await checkLatestPaymentStatus(user._id);
 
       if (!paymentCheck.found) {
-        replyText = "I couldn't find any pending orders for you. Please type 'Menu' to start a new order.";
+        replyText = "I couldn't find any pending orders. Start a new order below.";
+        interactive = {
+          type: "button",
+          body: { text: replyText },
+          action: { buttons: [{ type: "reply", reply: { id: "btn_menu", title: "🍔 Order Menu" } }] }
+        };
         break;
       }
 
       if (paymentCheck.isPaid) {
         paymentAttemptsMemory[phone] = 0; 
-        replyText = `🎉 *Your Payment is Confirmed & Feast Decreed!*\n\nOrder ID: *${paymentCheck.orderNumber}*\nPayment Method: *RAZORPAY ONLINE*\n\nOur grand chefs are already preparing your delicacies! 👨‍🍳🔥\n\nType *Track* whenever you wish to see your order's journey.`;
+        replyText = `🎉 *Payment Confirmed!*\n\nOrder ID: *${paymentCheck.orderNumber}*\n\nOur grand chefs are firing up the ovens! 👨‍🍳🔥`;
+        interactive = {
+          type: "button",
+          body: { text: replyText },
+          action: { buttons: [{ type: "reply", reply: { id: "btn_track", title: "📦 Track Order" } }] }
+        };
       } else {
         let attempts = (paymentAttemptsMemory[phone] || 0) + 1;
         paymentAttemptsMemory[phone] = attempts; 
@@ -359,21 +468,48 @@ async function actionExecutionNode(state) {
         if (attempts >= 3) {
           await cancelOrder(user._id);
           paymentAttemptsMemory[phone] = 0; 
-          replyText = `❌ *Order Cancelled*\n\nWe haven't received your payment after 3 attempts. Your order has been automatically cancelled for security reasons.\n\nReply *1* to browse the menu and order again.`;
+          replyText = `❌ *Order Cancelled*\n\nWe haven't received payment after 3 attempts. Your order has been cancelled for security reasons.`;
+          interactive = {
+            type: "button",
+            body: { text: replyText },
+            action: { buttons: [{ type: "reply", reply: { id: "btn_menu", title: "🍔 Order Menu" } }] }
+          };
         } else {
-          replyText = `⚠️ *Payment Not Received Yet*\n\nI just checked the royal treasury, but your payment hasn't reflected yet. *(Attempt ${attempts}/3)*\n\nPlease ensure you have paid using the Razorpay link provided.`;
+          replyText = `⚠️ *Payment Not Received Yet*\n\nI just checked the treasury, but payment hasn't reflected yet. *(Attempt ${attempts}/3)*\n\nPlease pay using the link provided above, then type "paid" again.`;
         }
       }
       break;
     }
 
+    case "ORDER_STATS": {
+      const stats = await getUserOrderStats(user._id);
+      if (stats && stats.totalOrders > 0) {
+        replyText = `📜 *Your Royal History*\n\n🛍️ Total Orders: *${stats.totalOrders}*\n✅ Delivered: *${stats.deliveredOrders}*\n❌ Cancelled: *${stats.cancelledOrders}*\n💎 Total Spent: *₹${stats.totalSpent.toFixed(2)}*`;
+      } else {
+        replyText = "You have not yet graced us with a completed order, my lord.";
+      }
+      interactive = {
+        type: "button",
+        body: { text: replyText },
+        action: { buttons: [{ type: "reply", reply: { id: "btn_menu", title: "🍔 Order Menu" } }] }
+      };
+      break;
+    }
+
     default: {
-      replyText = "My deepest apologies, esteemed guest, but this humble servant did not quite catch your meaning. You may type 'Menu' to browse our royal feasts, 'Track' to see your order's journey, or ask for our 'Address'.";
+      replyText = "My deepest apologies, esteemed guest, I didn't quite catch that. How may I help you?";
+      interactive = {
+        type: "button",
+        body: { text: replyText },
+        action: { buttons: [{ type: "reply", reply: { id: "btn_menu", title: "🍔 Menu" } }, { type: "reply", reply: { id: "btn_track", title: "📦 Track" } }] }
+      };
     }
   }
 
-  userContextMemory[phone] = replyText;
-  return { ...state, replyText }; 
+  const finalBotTextToSave = interactive ? interactive.body.text : replyText;
+  userContextMemory[phone] = finalBotTextToSave;
+  
+  return { ...state, replyText, interactive }; 
 }
 
 function buildOrderGraph() {
@@ -383,7 +519,8 @@ function buildOrderGraph() {
       inputText: { value: (old, n) => n ?? old, default: () => "" },
       aiIntent: { value: (old, n) => n ?? old, default: () => "GREETING" },
       aiData: { value: (old, n) => n ?? old, default: () => ({}) },
-      replyText: { value: (old, n) => n ?? old, default: () => "" }
+      replyText: { value: (old, n) => n ?? old, default: () => "" },
+      interactive: { value: (old, n) => n ?? old, default: () => null } 
     },
   });
 
