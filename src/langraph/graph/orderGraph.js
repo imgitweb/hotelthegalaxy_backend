@@ -51,12 +51,12 @@ async function agentDecisionNode(state) {
     if (msg === "home" || msg.includes("home") || msg === "1") {
       return { ...state, aiIntent: "SELECT_SAVED_ADDRESS", aiData: { address_index: 1 } };
     }
-    if (msg.includes("add new") || msg === "2" || msg === "3" || msg === "btn_new_address") {
+    if (msg.includes("add new") || msg === "2" || msg === "3" || msg.includes("btn_new_address")) {
       return { ...state, aiIntent: "PROMPT_NEW_ADDRESS", aiData: {} };
     }
   }
 
-  // 🔥 2. FAST ROUTING
+  // 🔥 2. BULLETPROOF FAST ROUTING
   if (msg.startsWith("cat_")) {
     return { ...state, aiIntent: "SELECT_CATEGORY", aiData: { categoryId: msg.replace("cat_", "") } };
   }
@@ -64,12 +64,12 @@ async function agentDecisionNode(state) {
     return { ...state, aiIntent: "SELECT_SAVED_ADDRESS", aiData: { addressId: msg.replace("addr_", "") } };
   }
 
-  if (msg === "btn_menu" || msg === "menu") return { ...state, aiIntent: "SHOW_MENU", aiData: {} };
-  if (msg === "btn_track" || msg === "track") return { ...state, aiIntent: "TRACK_ORDER", aiData: {} };
-  if (msg === "btn_help" || msg === "help") return { ...state, aiIntent: "HELP", aiData: {} };
-  if (msg === "btn_checkout" || msg === "checkout") return { ...state, aiIntent: "CHECKOUT", aiData: {} };
-  if (msg === "btn_add_more" || msg === "add more") return { ...state, aiIntent: "SHOW_MENU", aiData: {} };
-  if (msg === "btn_cancel_order") return { ...state, aiIntent: "CANCEL_ORDER", aiData: {} };
+  if (msg.includes("btn_menu") || msg.includes("order menu") || msg === "menu") return { ...state, aiIntent: "SHOW_MENU", aiData: {} };
+  if (msg.includes("btn_track") || msg.includes("track order") || msg === "track") return { ...state, aiIntent: "TRACK_ORDER", aiData: {} };
+  if (msg.includes("btn_help") || msg.includes("help")) return { ...state, aiIntent: "HELP", aiData: {} };
+  if (msg.includes("btn_checkout") || msg.includes("checkout")) return { ...state, aiIntent: "CHECKOUT", aiData: {} };
+  if (msg.includes("btn_add_more") || msg.includes("add more")) return { ...state, aiIntent: "SHOW_MENU", aiData: {} };
+  if (msg.includes("btn_cancel_order") || msg.includes("cancel order")) return { ...state, aiIntent: "CANCEL_ORDER", aiData: {} };
 
   // Normal Greetings Check 
   if (["hi", "hello", "start", "hy"].includes(msg)) return { ...state, aiIntent: "GREETING", aiData: {} };
@@ -77,7 +77,7 @@ async function agentDecisionNode(state) {
   
   if (msg.includes("stats") || msg.includes("history")) return { ...state, aiIntent: "ORDER_STATS", aiData: {} };
 
-  // 🔥 3. LLM Processing (Bulletproof Rules)
+  // 🔥 3. LLM Processing
   const prompt = `
     You are an intelligent order routing AI for "The Galaxy Hotel".
     CRITICAL INSTRUCTION: Read the 'BOT_LAST_MESSAGE' to understand what the user is replying to.
@@ -195,7 +195,6 @@ async function actionExecutionNode(state) {
       let categoryItems = [];
       let categoryName = aiData?.category_name || inputText;
 
-      // Agar ID nahi mili par text mein naam hai, toh DB mein dhundho
       if (!categoryId && categoryName) {
         const searchName = categoryName.toLowerCase().trim();
         const categories = await getCategories();
@@ -211,7 +210,6 @@ async function actionExecutionNode(state) {
         }
       }
 
-      // Naya Logic call (from updated orderTools.js)
       if (categoryId) {
         categoryItems = await getMenuByCategory(categoryId);
       }
@@ -263,15 +261,21 @@ async function actionExecutionNode(state) {
       if (addresses && addresses.length > 0) {
         const topAddresses = addresses.slice(0, 2); 
         
-        let buttons = topAddresses.map((addr, idx) => ({
-          type: "reply",
-          reply: { id: `addr_${addr._id}`, title: addr.label || `Home` }
-        }));
+        // 🔥 FIX: WhatsApp Button titles must be unique. 
+        // We prepend the index to make them unique (e.g., "1. Home", "2. Home")
+        let buttons = topAddresses.map((addr, idx) => {
+          let label = addr.label || "Address";
+          let uniqueTitle = `${idx + 1}. ${label}`.substring(0, 20); // max 20 chars
+          return {
+            type: "reply",
+            reply: { id: `addr_${addr._id}`, title: uniqueTitle }
+          };
+        });
         
         buttons.push({ type: "reply", reply: { id: "btn_new_address", title: "➕ Add NEW" } });
 
         let addressDetails = topAddresses.map((addr, idx) => 
-          `*${idx + 1}. ${addr.label || "Home"}*: ${addr.street}, ${addr.landmark}`
+          `*${idx + 1}. ${addr.label || "Address"}*: ${addr.street}, ${addr.landmark}`
         ).join("\n");
         
         addressDetails += `\n*${topAddresses.length + 1}.* ➕ Add a NEW Address`;
@@ -327,7 +331,7 @@ async function actionExecutionNode(state) {
         paymentAttemptsMemory[phone] = 0; 
         const selectedAddr = await getUserAddresses(user._id).then(addrs => addrs.find(a => a._id.toString() === addressId));
         
-        replyText = `✅ *Address Confirmed:* ${selectedAddr?.street || 'Home'}\n\n💳 *Online Royal Treasury*\nGrand Total: *₹${paymentData.totalAmount.toFixed(2)}*\n\n*(Aapka order auto-confirm ho jayega payment successful hote hi! Type "paid" once done)*`;
+        replyText = `✅ *Address Confirmed:* ${selectedAddr?.street || 'Home'}\n\n💳 *Online Royal Treasury*\nGrand Total: *₹${paymentData.totalAmount.toFixed(2)}*\n\n*(Aapka order auto-confirm ho jayega payment successful hote hi!)*`;
         
         interactive = {
           type: "cta_url",
@@ -365,7 +369,7 @@ async function actionExecutionNode(state) {
       if (paymentData.success) {
         paymentAttemptsMemory[phone] = 0; 
         
-        replyText = `✅ *New Address Saved:* ${newAddr.street}\n\n💳 *Online Royal Treasury*\nGrand Total: *₹${paymentData.totalAmount.toFixed(2)}*\n\n*(Aapka order auto-confirm ho jayega payment successful hote hi! Type "paid" once done)*`;
+        replyText = `✅ *New Address Saved:* ${newAddr.street}\n\n💳 *Online Royal Treasury*\nGrand Total: *₹${paymentData.totalAmount.toFixed(2)}*\n\n*(Aapka order auto-confirm ho jayega payment successful hote hi!)*`;
         
         interactive = {
           type: "cta_url",
