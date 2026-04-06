@@ -50,8 +50,8 @@ exports.chatMessage = async (req, res) => {
     }
 
     // 🔥 STATIC DATA USE KAR RAHE HAIN
-    const staticPhone = "8103306133";
-    const staticFullName = "himanshu";
+    const staticPhone = "9011013612";
+    const staticFullName = "CK";
 
     console.log(`✅ Running Web Chat for Static User: ${staticFullName} (${staticPhone})`);
 
