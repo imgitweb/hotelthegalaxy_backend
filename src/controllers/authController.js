@@ -2,49 +2,28 @@ const User = require("../models/User");
 const jwt = require("jsonwebtoken");
 const { generateOTP, hashOTP } = require("../utils/otp");
 const { sendOTP } = require("../services/smsService");
-
 const { sendAuthTemplate } = require("../utils/whatsaap/sendAuthTemplate");
-
 const MAX_OTP_REQUESTS = Number(process.env.OTP_MAX_REQUESTS_PER_HOUR) || 5;
-
 const OTP_COOLDOWN =
   Number(process.env.OTP_RESEND_COOLDOWN_SECONDS || 60) * 1000;
-
 const OTP_EXPIRY = Number(process.env.OTP_EXPIRY_MINUTES || 5) * 60 * 1000;
-
 const ONE_HOUR = 60 * 60 * 1000;
+const normalizePhone = (phone) => phone.replace(/\D/g, "");
 
 exports.sendOtp = async (req, res) => {
   try {
     const { fullName, phone, email } = req.body;
-
+    phone = normalizePhone(phone);
     if (!phone) {
       return res.status(400).json({
         success: false,
         message: "Phone number is required",
       });
     }
-
+ 
     let user = await User.findOne({ phone }).select(
       "+otpLastRequestedAt +otpRequestCount +otpRequestWindowStartedAt"
     );
-
-    // ✅ Create user if not exists
-    // if (!user) {
-    //   if (!fullName) {
-    //     return res.status(400).json({
-    //       success: false,
-    //       message: "Full name required for signup",
-    //     });
-    //   }
-
-    //   user = new User({
-    //     fullName,
-    //     phone,
-    //     email: email || null,
-    //   });
-    // }
-// ✅ LOGIN FLOW → ONLY EXISTING USERS
 if (!user) {
   return res.status(404).json({
     success: false,
@@ -53,7 +32,7 @@ if (!user) {
 }
     const now = Date.now();
 
-    // ✅ Cooldown check
+ 
     if (
       user.otpLastRequestedAt &&
       now - user.otpLastRequestedAt.getTime() < OTP_COOLDOWN
@@ -63,8 +42,7 @@ if (!user) {
         message: "Please wait before requesting OTP again",
       });
     }
-
-    // ✅ Reset window after 1 hour
+ 
     if (
       !user.otpRequestWindowStartedAt ||
       now - user.otpRequestWindowStartedAt.getTime() > ONE_HOUR
@@ -73,15 +51,14 @@ if (!user) {
       user.otpRequestCount = 0;
     }
 
-    // ✅ Max attempts check
+   
     if (user.otpRequestCount >= MAX_OTP_REQUESTS) {
       return res.status(429).json({
         success: false,
         message: "Too many OTP requests. Try again later.",
       });
     }
-
-    // ✅ Generate & hash OTP
+ 
     const otp = generateOTP();
     const hashedOtp = hashOTP(otp);
 
@@ -91,8 +68,7 @@ if (!user) {
     user.otpRequestCount += 1;
 
     await user.save();
-
-    // ✅ SEND WHATSAPP OTP (REPLACES SMS)
+ 
     const whatsappResponse = await sendAuthTemplate(phone, otp);
 
     if (!whatsappResponse.success) {
@@ -118,10 +94,9 @@ if (!user) {
     });
   }
 };
-
 exports.sendSignupOtp = async (req, res) => {
   try {
-    const { fullName, phone, email } = req.body;
+    let { fullName, phone, email } = req.body;
 
     if (!phone || !fullName) {
       return res.status(400).json({
@@ -130,7 +105,8 @@ exports.sendSignupOtp = async (req, res) => {
       });
     }
 
-    // ❌ Check if user already exists
+   
+   phone = normalizePhone(phone);
     const existingUser = await User.findOne({ phone });
 
     if (existingUser) {
@@ -140,7 +116,6 @@ exports.sendSignupOtp = async (req, res) => {
       });
     }
 
-    // ✅ Create new user
     const user = new User({
       fullName,
       phone,
@@ -158,8 +133,7 @@ exports.sendSignupOtp = async (req, res) => {
     user.otpRequestCount = 1;
 
     await user.save();
-
-    const whatsappResponse = await sendAuthTemplate(phone, otp);
+    const whatsappResponse = await sendAuthTemplate(`+${phone}`, otp);
 
     if (!whatsappResponse.success) {
       return res.status(500).json({
@@ -181,10 +155,11 @@ exports.sendSignupOtp = async (req, res) => {
     });
   }
 };
-
 exports.verifyOtp = async (req, res) => {
   try {
-    const { phone, otp } = req.body;
+    let { phone, otp } = req.body;
+
+    phone = normalizePhone(phone);
 
     if (!phone || !otp) {
       return res.status(400).json({
@@ -276,7 +251,6 @@ exports.verifyOtp = async (req, res) => {
     });
   }
 };
-
 exports.AddAddress = async (re, res) => {
   try {
   } catch (error) {
@@ -297,7 +271,6 @@ exports.getAddress = async (req, res) => {
     });
   }
 };
-
 exports.updateProfile = async (req, res) => {
   try {
     const { fullName, email } = req.body;

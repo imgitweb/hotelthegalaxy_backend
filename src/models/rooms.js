@@ -12,14 +12,14 @@ const roomSchema = new mongoose.Schema(
     slug: {
       type: String,
       unique: true,
-      index: true,
+      
     },
 
     price: {
       type: Number,
       required: true,
       min: 0,
-      index: true,
+      
     },
 
     size: {
@@ -31,14 +31,14 @@ const roomSchema = new mongoose.Schema(
       type: String,
       required: true,
       enum: ["Suite", "Deluxe", "Standard", "Villa", "Penthouse"],
-      index: true,
+      
     },
 
     category: {
       type: String,
       enum: ["Suite", "Deluxe"],
       required: true,
-      index: true,
+    
     },
 
     maxGuests: {
@@ -94,8 +94,14 @@ const roomSchema = new mongoose.Schema(
     isActive: {
       type: Boolean,
       default: true,
-      index: true,
+     
     },
+    status: {
+  type: String,
+  enum: ["available", "booked", "maintenance"],
+  default: "available",
+  index: true,
+},
   },
   { timestamps: true },
 );
@@ -120,8 +126,6 @@ roomSchema.pre("save", function (next) {
   } else if (this.roomType === "Deluxe") {
     this.category = "Deluxe";
   }
-
-//   next();
 });
 
 module.exports = mongoose.model("Room", roomSchema);
