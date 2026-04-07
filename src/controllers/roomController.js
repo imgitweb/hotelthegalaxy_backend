@@ -103,15 +103,16 @@ exports.getRoomById = async (req, res) => {
 // 🔥 UPDATE ROOM
 exports.updateRoom = async (req, res) => {
   try {
-    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+    const { id } = req.params;
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
       return res.status(400).json({
         success: false,
         message: "Invalid ID",
       });
     }
 
-    const room = await Room.findById(req.params.id);
-
+    const room = await Room.findById(id);
     if (!room) {
       return res.status(404).json({
         success: false,
@@ -119,59 +120,54 @@ exports.updateRoom = async (req, res) => {
       });
     }
 
-    // 🔥 CATEGORY AUTO
-    if (req.body.roomType) {
-      if (req.body.roomType === "Suite") req.body.category = "Suite";
-      else if (req.body.roomType === "Deluxe") req.body.category = "Deluxe";
-      else req.body.category = "Deluxe";
-    }
+    // ✅ number conversion
+    ["price", "maxGuests", "bedCount"].forEach((field) => {
+      if (req.body[field]) req.body[field] = Number(req.body[field]);
+    });
 
-    // 🔥 number fix
-    if (req.body.price) req.body.price = Number(req.body.price);
-    if (req.body.maxGuests) req.body.maxGuests = Number(req.body.maxGuests);
-    if (req.body.bedCount) req.body.bedCount = Number(req.body.bedCount);
-
-    // amenities fix
-    if (req.body.amenities && typeof req.body.amenities === "string") {
+    // ✅ amenities fix
+    if (typeof req.body.amenities === "string") {
       req.body.amenities = req.body.amenities.split(",");
     }
 
-    // slug update
+    // ✅ category auto
+    if (req.body.roomType) {
+      req.body.category =
+        req.body.roomType === "Suite" ? "Suite" : "Deluxe";
+    }
+
+    // ✅ slug update
     if (req.body.name) {
       const baseSlug = req.body.name
         .toLowerCase()
         .replace(/ /g, "-")
         .replace(/[^\w-]+/g, "");
 
-      req.body.slug = `${baseSlug}-${Date.now()}`;
+      req.body.slug = `${baseSlug}-${Date.now()}-${Math.random()
+        .toString(36)
+        .substring(2, 6)}`;
     }
 
-    let updatedImages = room.images;
+    let images = room.images;
 
-    // 🔥 new images
+    // ✅ image replace
     if (req.files && req.files.length > 0) {
+      // delete old
       room.images.forEach((img) => {
         const imgPath = path.join("public", img);
-
-        try {
-          if (fs.existsSync(imgPath)) {
-            fs.unlinkSync(imgPath);
-          }
-        } catch (e) {
-          console.log("Image delete failed:", e.message);
-        }
+        if (fs.existsSync(imgPath)) fs.unlinkSync(imgPath);
       });
 
-      updatedImages = req.files.map(
+      images = req.files.map(
         (file) => `/uploads/rooms/${file.filename}`
       );
     }
 
     const updatedRoom = await Room.findByIdAndUpdate(
-      req.params.id,
+      id,
       {
         ...req.body,
-        images: updatedImages,
+        images,
       },
       { new: true, runValidators: true }
     );
@@ -213,6 +209,43 @@ exports.deleteRoom = async (req, res) => {
     res.json({
       success: true,
       message: "Room soft deleted successfully",
+    });
+  } catch (err) {
+    res.status(500).json({
+      success: false,
+      message: err.message,
+    });
+  }
+};
+
+exports.updateRoomStatus = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { status } = req.body;
+
+    if (!["available", "booked", "maintenance"].includes(status)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid status",
+      });
+    }
+
+    const room = await Room.findByIdAndUpdate(
+      id,
+      { status },
+      { new: true }
+    );
+
+    if (!room) {
+      return res.status(404).json({
+        success: false,
+        message: "Room not found",
+      });
+    }
+
+    res.json({
+      success: true,
+      data: room,
     });
   } catch (err) {
     res.status(500).json({

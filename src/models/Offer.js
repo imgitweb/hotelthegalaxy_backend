@@ -61,7 +61,6 @@ const offerSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-// 🔥 MAIN FIX (IMPORTANT)
 module.exports =
   mongoose.models.OfferDining ||
   mongoose.model("OfferDining", offerSchema);
