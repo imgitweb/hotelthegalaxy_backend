@@ -166,12 +166,12 @@ async function placeOrder(phone, paymentMethod) {
   const orderNumber = `ORD-${Math.floor(100000 + Math.random() * 900000)}`;
   
   const newOrder = await Order.create({
-<<<<<<< HEAD
+
     orderNumber, user: user._id, items: session.cart, 
     pricing: { subtotal, deliveryCharge, tax: 0, total }, 
     address: { fullName: user.fullName || "WhatsApp User", phone: phone, street: selectedAddress ? selectedAddress.street : "Store Pickup", landmark: selectedAddress ? selectedAddress.landmark : "", city: "Chhindwara" },
     payment: { method: paymentMethod, status: paymentMethod === "ONLINE" ? "paid" : "pending" }, status: "pending",
-=======
+
     orderNumber,
     user: user._id,
     items: session.cart,
@@ -187,7 +187,7 @@ async function placeOrder(phone, paymentMethod) {
     payment: { method: paymentMethod, status: paymentMethod === "ONLINE" ? "paid" : "pending" },
     status: "pending",
     source: "whatsapp",
->>>>>>> e400c81c065bbacae87b3085db13799e147d1b30
+
   });
   session.step = "HOME"; session.cart = []; session.addressId = null; await session.save();
   return newOrder;
