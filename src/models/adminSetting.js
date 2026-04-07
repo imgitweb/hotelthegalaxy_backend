@@ -1,6 +1,4 @@
-// models/settings.model.js
 const mongoose = require("mongoose");
-
 const settingsSchema = new mongoose.Schema(
   {
     hotelName: { type: String, required: true },
@@ -13,4 +11,4 @@ const settingsSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-module.exports = mongoose.model("Settings", settingsSchema);
+module.exports = mongoose.model("adminSetting", settingsSchema);

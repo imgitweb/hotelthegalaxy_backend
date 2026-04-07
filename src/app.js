@@ -28,20 +28,17 @@ const enquiryRoutes = require("./routes/enquiryRoutes");
 const reviewRoutes = require("./routes/reviewRoutes");
 const combsRoute = require("./routes/public/combo.routes");
 const paymentRoutes = require("./routes/paymentRoutes");
-
 const whatsappRoutes = require("./routes/whatsappRoutes");
 const chatRoutes = require("./routes/chatRoutes");
-
 const settingRoutes = require("./routes/settingRoutes");
-
 const offerRoutepublic = require("./routes/public/offers.routes");
 const dashboardRoutes = require("./routes/admin/dashboardRoutes");
 const riderRoutes = require("./routes/admin/rider.routes");
 const staffRoutes = require("./routes/admin/staffRoutes");
 const roomRoutes = require("./routes/roomRoutes");
+const adminSettingRoutes = require("./routes/adminSettingRoutes")
 const path = require("path");
 const router = require("express").Router();
-
 const app = express();
 const allowedOrigins = [
   "http://localhost:3000",
@@ -55,7 +52,6 @@ const allowedOrigins = [
   "https://admin.hotelthegalaxy.in",
   "https://www.admin.hotelthegalaxy.in",
 ].filter(Boolean);
-
 const corsOptions = {
   origin: function (origin, callback) {
     if (!origin) return callback(null, true);
@@ -126,6 +122,7 @@ app.use("/api/v1/admin/dining", adminOrderRoutes);
 app.use("/api/v1/enquiries", enquiryRoutes);
 app.use("/api/v1/reviews", reviewRoutes);
 app.use("/api/v1/dining", combsRoute);
+app.use("/api/v1/adminSetting",adminSettingRoutes);
 
 app.use("/api/v1/settings", settingRoutes);
 app.use("/api/webhook", whatsappRoutes);
