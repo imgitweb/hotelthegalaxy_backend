@@ -7,7 +7,7 @@ const Order = require("../../models/User/ordersModel");
 
 const {
   checkUserExists, registerNewUser, getOrCreateSession, getActiveOrder,
-  getTodayRosterItems, getUserAddresses, getUserOrderStats, getCategories, getMenuByCategory,
+  getTodayRosterItems, searchTodayRosterItems, getUserAddresses, getUserOrderStats, getCategories, getMenuByCategory,
   saveNewAddress, addItemsToCart, placeOrder, cancelOrder, removeItemsFromCart, 
   processBotOrderAndPayment, checkLatestPaymentStatus, verifyDeliveryLocation, getActiveOffers
 } = require("../tools/orderTools");
@@ -23,7 +23,7 @@ const llm = new ChatOpenAI({
 
 const IntentSchema = z.object({
   intent: z.enum([
-    "GREETING", "SHOW_MENU", "SELECT_CATEGORY", "ADD_TO_CART", "REMOVE_FROM_CART", 
+    "GREETING", "SHOW_MENU", "SELECT_CATEGORY", "SEARCH_ITEM", "ADD_TO_CART", "REMOVE_FROM_CART", 
     "CHECKOUT", "PROVIDE_ADDRESS", "SELECT_SAVED_ADDRESS", "PROMPT_NEW_ADDRESS", "PROVIDE_NAME", 
     "COMPLETE_ORDER", "TRACK_ORDER", "ORDER_STATS", 
     "CANCEL_ORDER", "HELP", "GENERAL_INFO", "SHOW_OFFERS", "SHOW_ALL_TODAY", "UNKNOWN" 
@@ -33,7 +33,8 @@ const IntentSchema = z.object({
   extracted_items: z.array(z.object({ name: z.string(), quantity: z.number() })).nullable().describe("Extract food items and quantities. If user names food without quantity, assume 1."),
   address: z.object({ area: z.string(), landmark: z.string() }).nullable(),
   address_index: z.number().nullable().describe("If user replies with a number to select an address"),
-  category_name: z.string().nullable().describe("Extract the category name like 'Thali', 'Soup', 'Dal', 'Rice', 'Chinese' if user types it.")
+  category_name: z.string().nullable().describe("Extract the category name like 'Thali', 'Soup', 'Dal', 'Rice', 'Chinese' if user types it."),
+  search_query: z.string().nullable().describe("Extract the broad term like 'paneer', 'chicken', 'roti' if user just searches for it without saying 'order'.")
 });
 
 const aiBrain = llm.withStructuredOutput(IntentSchema, { strict: true });
@@ -52,11 +53,7 @@ async function agentDecisionNode(state) {
     if (msg.includes("add new") || msg === "2" || msg === "3" || msg.includes("btn_new_address")) return { ...state, aiIntent: "PROMPT_NEW_ADDRESS", aiData: {} };
   }
 
-  // 🔥 FIX: Bulletproof Onboarding check (Dono purane English aur naye Hinglish messages ke liye)
-  const isAskingName = previousBotMessage.includes("apna naam bataein") || 
-                       previousBotMessage.includes("naam bata sakte hain") || 
-                       previousBotMessage.includes("good name");
-                       
+  const isAskingName = previousBotMessage.includes("apna naam bataein") || previousBotMessage.includes("naam bata sakte hain") || previousBotMessage.includes("good name");
   if (isAskingName && msg.length > 0) {
     return { ...state, aiIntent: "PROVIDE_NAME", aiData: { user_name: state.inputText } };
   }
@@ -86,12 +83,12 @@ async function agentDecisionNode(state) {
     USER_REPLY: """${state.inputText}"""
     
     === STRICT DECISION RULES ===
-    1. CATEGORY BROWSE: If USER_REPLY is a food category (like "Thali", "Soup", "Dal", "Starter", "Main Course", "Rice", "Chinese") WITHOUT a quantity -> intent MUST be "SELECT_CATEGORY" and extract 'category_name'.
-    2. ADDRESS SELECTION: If BOT_LAST_MESSAGE asks for address, ANY address detail typed means "PROVIDE_ADDRESS". NEVER return GREETING.
-    3. ADD TO CART: ONLY trigger "ADD_TO_CART" if the user explicitly types a FOOD ITEM to order (e.g., "1 Thali", "add paneer").
-    4. REMOVE FROM CART: If user explicitly asks to remove/delete an item (e.g., "remove 1 thali", "delete dal") -> intent "REMOVE_FROM_CART" and extract items.
-    5. COMPLETE ORDER: If BOT_LAST_MESSAGE contains "Razorpay" AND USER_REPLY means "done", "paid", or "yes" -> intent "COMPLETE_ORDER".
-    6. OFFERS & ALL ITEMS: If asking for discounts -> "SHOW_OFFERS". If asking for what is available today -> "SHOW_ALL_TODAY".
+    1. CATEGORY BROWSE: If USER_REPLY is a food category WITHOUT a quantity -> intent MUST be "SELECT_CATEGORY".
+    2. SEARCH ITEM (NEW): If user mentions a broad term like "paneer", "chicken", "biryani" WITHOUT a quantity (e.g., "i want paneer", "paneer dikhao") -> intent "SEARCH_ITEM" and extract 'search_query'.
+    3. ADDRESS SELECTION: If BOT_LAST_MESSAGE asks for address, ANY address detail typed means "PROVIDE_ADDRESS". NEVER return GREETING.
+    4. ADD TO CART: ONLY trigger "ADD_TO_CART" if the user explicitly types a FOOD ITEM WITH A QUANTITY or explicitly says "order X" (e.g., "1 Kadhai Paneer", "add 2 roti"). 
+    5. REMOVE FROM CART: If user asks to remove/delete an item -> intent "REMOVE_FROM_CART" and extract items.
+    6. COMPLETE ORDER: If BOT_LAST_MESSAGE contains "Razorpay" AND USER_REPLY means "done" or "paid" -> intent "COMPLETE_ORDER".
   `;
 
   try {
@@ -104,9 +101,8 @@ async function actionExecutionNode(state) {
   const { aiIntent, aiData, phone, inputText } = state;
   let user = await checkUserExists(phone);
 
-  // Naya user aane par simple Hinglish message
   if (!user && aiIntent !== "PROVIDE_NAME" && aiIntent !== "GENERAL_INFO") {
-    let replyText = "👑 *Welcome to The Galaxy Hotel!*\n\nHumari aapse pehli mulaqat hai.\n\nKripya apna naam bataein,\ntaaki hum aapko behtar serve kar sakein.";
+    let replyText = "👑 *Welcome to The Galaxy Hotel!*\n\nKripya apna naam bataein,\n\ntaaki hum aapko behtar serve kar sakein.";
     userContextMemory[phone] = replyText;
     return { ...state, replyText, interactive: null };
   }
@@ -121,45 +117,24 @@ async function actionExecutionNode(state) {
       if (!user) user = await registerNewUser(phone, extractedName);
       
       replyText = `Aapse milkar accha laga, *${user.fullName}*! 👑\n\nAaj aap kya order karna chahenge?`;
-      interactive = { 
-        type: "button", 
-        body: { text: replyText }, 
-        action: { buttons: [ 
-          { type: "reply", reply: { id: "btn_menu", title: "🍔 Menu" } }, 
-          { type: "reply", reply: { id: "btn_offers", title: "🎁 Offers" } },
-          { type: "reply", reply: { id: "btn_help", title: "ℹ️ Help" } }
-        ] } 
-      };
+      interactive = { type: "button", body: { text: replyText }, action: { buttons: [ { type: "reply", reply: { id: "btn_menu", title: "🍔 Menu" } }, { type: "reply", reply: { id: "btn_offers", title: "🎁 Offers" } }, { type: "reply", reply: { id: "btn_help", title: "ℹ️ Help" } } ] } };
       break;
     }
     case "GREETING": {
       const hasActiveOrder = await getActiveOrder(user._id);
       replyText = `👑 *Welcome back, ${user.fullName}!*\n\nThe Galaxy Hotel mein aapka swagat hai.\n\nAaj kya order karna chahenge aap?`;
       
-      // WhatsApp max 3 buttons allow karta hai
       let buttons = [{ type: "reply", reply: { id: "btn_menu", title: "🍔 Menu" } }];
-      if (hasActiveOrder) {
-        buttons.push({ type: "reply", reply: { id: "btn_track", title: "📦 Track" } });
-      }
+      if (hasActiveOrder) { buttons.push({ type: "reply", reply: { id: "btn_track", title: "📦 Track" } }); }
       buttons.push({ type: "reply", reply: { id: "btn_offers", title: "🎁 Offers" } });
-      
-      if (buttons.length < 3) {
-        buttons.push({ type: "reply", reply: { id: "btn_help", title: "ℹ️ Help" } });
-      }
+      if (buttons.length < 3) { buttons.push({ type: "reply", reply: { id: "btn_help", title: "ℹ️ Help" } }); }
 
       interactive = { type: "button", body: { text: replyText }, action: { buttons } };
       break;
     }
     case "HELP": {
       replyText = `🎧 *Galaxy Hotel Support*\n\n📞 Call karein: +916262633305\n📧 Email: gmhotelthegalaxy@gmail.com\n\n*(Upar diye number par tap karke aap direct call kar sakte hain!)*`;
-      interactive = { 
-        type: "button", 
-        body: { text: replyText }, 
-        action: { buttons: [
-          { type: "reply", reply: { id: "btn_menu", title: "🍔 Menu" } },
-          { type: "reply", reply: { id: "btn_offers", title: "🎁 Offers" } }
-        ] } 
-      };
+      interactive = { type: "button", body: { text: replyText }, action: { buttons: [ { type: "reply", reply: { id: "btn_menu", title: "🍔 Menu" } }, { type: "reply", reply: { id: "btn_offers", title: "🎁 Offers" } } ] } };
       break;
     }
     case "SHOW_OFFERS": {
@@ -194,6 +169,22 @@ async function actionExecutionNode(state) {
       interactive = { type: "list", header: { type: "text", text: "🍽️ The Galaxy Menu" }, body: { text: "Neeche diye gaye button par click karke\ncategory select karein 👇" }, action: { button: "📋 Menu Dekhein", sections: [{ title: "Categories", rows: rows }] } };
       break;
     }
+    
+    // 🔥 NEW: Handle Broad Search (e.g. "paneer")
+    case "SEARCH_ITEM": {
+      const query = aiData?.search_query || inputText.trim();
+      const results = await searchTodayRosterItems(query);
+      
+      if (!results || results.length === 0) {
+        replyText = `Maaf kijiyega, aaj humare paas *${query}* se juda koi item nahi hai. 😔`;
+        interactive = { type: "button", body: { text: replyText }, action: { buttons: [{ type: "reply", reply: { id: "btn_menu", title: "🍔 Pura Menu Dekhein" } }] } };
+      } else {
+        const menuText = results.map(m => `▪️ *${m.name}* - ₹${m.basePrice}`).join("\n");
+        replyText = `🔍 *${query.toUpperCase()} ke Items:*\n\n${menuText}\n\n👉 *Pura naam aur quantity likhein (Jaise: '1 ${results[0].name}')*`;
+      }
+      break;
+    }
+
     case "SELECT_CATEGORY": {
       let categoryId = aiData?.categoryId; let categoryItems = []; let categoryName = aiData?.category_name || inputText;
       if (!categoryId && categoryName) {
@@ -215,7 +206,7 @@ async function actionExecutionNode(state) {
     case "ADD_TO_CART": {
       const itemsToAdd = aiData?.extracted_items || [];
       if (itemsToAdd.length === 0) {
-        replyText = "Kripya item ka naam aur quantity theek se likhein.\n(Jaise: '1 Pizza').";
+        replyText = "Kripya item ka pura naam aur quantity likhein.\n(Jaise: '1 Kadhai Paneer').";
       } else {
         const { cart, messages, setting } = await addItemsToCart(phone, itemsToAdd);
         
@@ -342,7 +333,7 @@ async function actionExecutionNode(state) {
         if (["dispatched", "out_for_delivery"].includes(orderStatus) && orderToTrack.deliveryBoy) { 
           replyText += `🛵 *Delivery Boy raste mein hai!*\nNaam: ${orderToTrack.deliveryBoy.name || "Executive"}\n📞 Contact: ${orderToTrack.deliveryBoy.phone}\n\n`; 
         } else { 
-          replyText += `👨‍🍳 Humare chefs aapka khana prepare kar rahe hain.\n\n`; 
+          replyText += `👨‍🍳 Humare chefs aapka order prepare kar rahe hain.\n\n`; 
         }
         
         const uncancelableStatuses = ["confirmed", "preparing", "dispatched", "out_for_delivery", "delivered"];

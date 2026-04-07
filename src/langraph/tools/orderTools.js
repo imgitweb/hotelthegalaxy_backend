@@ -74,6 +74,14 @@ async function getTodayRosterItems() {
   return roster.items.filter(item => item.id && item.quantity > 0).map(item => ({ _id: item.id._id, name: item.id.name, basePrice: item.id.basePrice, category: item.id.category, maxAllowed: item.quantity, availableNow: item.quantity }));
 }
 
+// 🔥 NAYA: Search Function
+async function searchTodayRosterItems(searchTerm) {
+  if (!searchTerm) return [];
+  const term = searchTerm.toLowerCase().trim();
+  const allItems = await getTodayRosterItems();
+  return allItems.filter(item => item.name.toLowerCase().includes(term));
+}
+
 async function getMenuByCategory(categoryId) { 
   try {
     const subCategories = await SubCategory.find({ category: categoryId }).lean();
@@ -107,29 +115,37 @@ async function addItemsToCart(phone, items) {
   for (const it of items) {
     const name = String(it.name || "").toLowerCase(); const qtyRequested = Math.max(1, parseInt(it.quantity || it.qty || 1));
     const rosterItem = rosterItems.find((m) => m.name.toLowerCase().includes(name));
-    if (!rosterItem) { feedbackMessages.push(`❌ *${it.name}* aaj ke menu mein available nahi hai.`); continue; }
-    const existing = session.cart.find((x) => String(x.menuItemId) === String(rosterItem._id));
+    
+    // Exact match failed, try partial
+    if (!rosterItem) { 
+      const partialMatch = rosterItems.find(m => m.name.toLowerCase() === name);
+      if(!partialMatch) {
+         feedbackMessages.push(`❌ *${it.name}* aaj ke menu mein available nahi hai. Kripya pura naam likhein.`); continue; 
+      }
+    }
+    
+    const itemToAdd = rosterItem;
+
+    const existing = session.cart.find((x) => String(x.menuItemId) === String(itemToAdd._id));
     const currentCartQty = existing ? existing.quantity : 0; const newTotalQty = currentCartQty + qtyRequested;
-    if (newTotalQty > rosterItem.maxAllowed) {
-       const allowedToAdd = rosterItem.maxAllowed - currentCartQty;
+    if (newTotalQty > itemToAdd.maxAllowed) {
+       const allowedToAdd = itemToAdd.maxAllowed - currentCartQty;
        if (allowedToAdd > 0) {
-           feedbackMessages.push(`⚠️ *${rosterItem.name}* ke liye aap max *${rosterItem.maxAllowed}* order kar sakte hain. Humne cart mein baaki *${allowedToAdd}* add kar diya hai.`);
+           feedbackMessages.push(`⚠️ *${itemToAdd.name}* ke liye aap max *${itemToAdd.maxAllowed}* order kar sakte hain. Humne cart mein baaki *${allowedToAdd}* add kar diya hai.`);
            if (existing) { existing.quantity += allowedToAdd; existing.total = existing.quantity * existing.price; } 
-           else { session.cart.push({ menuItemId: rosterItem._id, name: rosterItem.name, price: rosterItem.basePrice, quantity: allowedToAdd, total: rosterItem.basePrice * allowedToAdd }); }
-       } else { feedbackMessages.push(`⚠️ Aap already *${rosterItem.name}* ki maximum limit cart mein add kar chuke hain.`); }
+           else { session.cart.push({ menuItemId: itemToAdd._id, name: itemToAdd.name, price: itemToAdd.basePrice, quantity: allowedToAdd, total: itemToAdd.basePrice * allowedToAdd }); }
+       } else { feedbackMessages.push(`⚠️ Aap already *${itemToAdd.name}* ki maximum limit cart mein add kar chuke hain.`); }
     } else {
-       feedbackMessages.push(`✅ *${qtyRequested}x ${rosterItem.name}* cart mein add ho gaya.`);
+       feedbackMessages.push(`✅ *${qtyRequested}x ${itemToAdd.name}* cart mein add ho gaya.`);
        if (existing) { existing.quantity += qtyRequested; existing.total = existing.quantity * existing.price; } 
-       else { session.cart.push({ menuItemId: rosterItem._id, name: rosterItem.name, price: rosterItem.basePrice, quantity: qtyRequested, total: rosterItem.basePrice * qtyRequested }); }
+       else { session.cart.push({ menuItemId: itemToAdd._id, name: itemToAdd.name, price: itemToAdd.basePrice, quantity: qtyRequested, total: itemToAdd.basePrice * qtyRequested }); }
     }
   }
-  
-  session.markModified('cart'); // 🔥 BUG FIX: Ensure MongoDB updates the array
+  session.markModified('cart'); 
   await session.save(); 
   return { cart: session.cart, messages: feedbackMessages, setting }; 
 }
 
-// 🔥 BUG FIX: Remove hone par array update karna aur setting bhejna zaroori hai
 async function removeItemsFromCart(phone, items) { 
   const session = await getOrCreateSession(phone); 
   const setting = await Setting.findOne() || { baseFee: 30, freeDeliveryAbove: 500 }; 
@@ -141,15 +157,11 @@ async function removeItemsFromCart(phone, items) {
     if (existingIndex !== -1) {
       const existingItem = session.cart[existingIndex]; 
       existingItem.quantity -= qtyToRemove;
-      if (existingItem.quantity <= 0) { 
-        session.cart.splice(existingIndex, 1); 
-      } else { 
-        existingItem.total = existingItem.quantity * existingItem.price; 
-      }
+      if (existingItem.quantity <= 0) { session.cart.splice(existingIndex, 1); } 
+      else { existingItem.total = existingItem.quantity * existingItem.price; }
     }
   }
-  
-  session.markModified('cart'); // 🔥 BUG FIX: Forces DB to save array mutations accurately
+  session.markModified('cart'); 
   await session.save(); 
   return { cart: session.cart, setting };
 }
@@ -260,7 +272,7 @@ async function getActiveOffers() {
 
 module.exports = {
   checkUserExists, registerNewUser, getOrCreateSession, getActiveOrder, getActiveOffers,
-  getCategories, getMenuByCategory, getUserAddresses, getUserOrderStats, getTodayRosterItems,
+  getCategories, getMenuByCategory, getUserAddresses, getUserOrderStats, getTodayRosterItems, searchTodayRosterItems,
   saveNewAddress, addItemsToCart, placeOrder, cancelOrder, removeItemsFromCart, 
   processBotOrderAndPayment, checkLatestPaymentStatus, verifyDeliveryLocation
 };
