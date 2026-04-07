@@ -41,15 +41,24 @@ const aiBrain = llm.withStructuredOutput(IntentSchema, { strict: true });
 async function agentDecisionNode(state) {
   const msg = (state.inputText || "").trim().toLowerCase();
   const phone = state.phone;
-  const previousBotMessage = userContextMemory[phone] || "None";
+  const previousBotMessage = (userContextMemory[phone] || "None").toLowerCase();
   
   console.log(`🧐 Memory Context for ${phone}:`, previousBotMessage.substring(0, 80).replace(/\n/g, ' ') + "...");
 
-  const isAskingAddress = previousBotMessage.toLowerCase().includes("where shall we dispatch") || previousBotMessage.toLowerCase().includes("where to dispatch");
+  const isAskingAddress = previousBotMessage.includes("kahan deliver karna hai") || previousBotMessage.includes("delivery address") || previousBotMessage.includes("naya address");
   
   if (isAskingAddress) {
     if (msg === "home" || msg.includes("home") || msg === "1") return { ...state, aiIntent: "SELECT_SAVED_ADDRESS", aiData: { address_index: 1 } };
     if (msg.includes("add new") || msg === "2" || msg === "3" || msg.includes("btn_new_address")) return { ...state, aiIntent: "PROMPT_NEW_ADDRESS", aiData: {} };
+  }
+
+  // 🔥 FIX: Bulletproof Onboarding check (Dono purane English aur naye Hinglish messages ke liye)
+  const isAskingName = previousBotMessage.includes("apna naam bataein") || 
+                       previousBotMessage.includes("naam bata sakte hain") || 
+                       previousBotMessage.includes("good name");
+                       
+  if (isAskingName && msg.length > 0) {
+    return { ...state, aiIntent: "PROVIDE_NAME", aiData: { user_name: state.inputText } };
   }
 
   if (msg.startsWith("cat_")) return { ...state, aiIntent: "SELECT_CATEGORY", aiData: { categoryId: msg.replace("cat_", "") } };
@@ -64,7 +73,7 @@ async function agentDecisionNode(state) {
   if (msg.includes("btn_offers") || msg === "offers") return { ...state, aiIntent: "SHOW_OFFERS", aiData: {} };
   if (msg.includes("all items") || msg === "all menu") return { ...state, aiIntent: "SHOW_ALL_TODAY", aiData: {} };
 
-  if (["hi", "hello", "start", "hy"].includes(msg)) return { ...state, aiIntent: "GREETING", aiData: {} };
+  if (["hi", "hello", "start", "hy", "namaste"].includes(msg)) return { ...state, aiIntent: "GREETING", aiData: {} };
   if (msg === "home" && !isAskingAddress) return { ...state, aiIntent: "GREETING", aiData: {} };
   if (msg.includes("stats") || msg.includes("history")) return { ...state, aiIntent: "ORDER_STATS", aiData: {} };
 
@@ -77,8 +86,8 @@ async function agentDecisionNode(state) {
     USER_REPLY: """${state.inputText}"""
     
     === STRICT DECISION RULES ===
-    1. CATEGORY BROWSE: If USER_REPLY is a food category (like "Thali", "Soup", "Dal", "Starter") WITHOUT a quantity -> intent MUST be "SELECT_CATEGORY" and extract 'category_name'.
-    2. ADDRESS SELECTION: If BOT_LAST_MESSAGE asks "Where shall we dispatch", ANY address detail typed means "PROVIDE_ADDRESS". NEVER return GREETING.
+    1. CATEGORY BROWSE: If USER_REPLY is a food category (like "Thali", "Soup", "Dal", "Starter", "Main Course", "Rice", "Chinese") WITHOUT a quantity -> intent MUST be "SELECT_CATEGORY" and extract 'category_name'.
+    2. ADDRESS SELECTION: If BOT_LAST_MESSAGE asks for address, ANY address detail typed means "PROVIDE_ADDRESS". NEVER return GREETING.
     3. ADD TO CART: ONLY trigger "ADD_TO_CART" if the user explicitly types a FOOD ITEM to order (e.g., "1 Thali", "add paneer").
     4. REMOVE FROM CART: If user explicitly asks to remove/delete an item (e.g., "remove 1 thali", "delete dal") -> intent "REMOVE_FROM_CART" and extract items.
     5. COMPLETE ORDER: If BOT_LAST_MESSAGE contains "Razorpay" AND USER_REPLY means "done", "paid", or "yes" -> intent "COMPLETE_ORDER".
@@ -95,8 +104,9 @@ async function actionExecutionNode(state) {
   const { aiIntent, aiData, phone, inputText } = state;
   let user = await checkUserExists(phone);
 
+  // Naya user aane par simple Hinglish message
   if (!user && aiIntent !== "PROVIDE_NAME" && aiIntent !== "GENERAL_INFO") {
-    let replyText = "👑 *Welcome to The Galaxy Hotel!*\n\nIt is an absolute honor to receive you. As this is your first visit, may I humbly know your good name so I can address you properly?";
+    let replyText = "👑 *Welcome to The Galaxy Hotel!*\n\nHumari aapse pehli mulaqat hai.\n\nKripya apna naam bataein,\ntaaki hum aapko behtar serve kar sakein.";
     userContextMemory[phone] = replyText;
     return { ...state, replyText, interactive: null };
   }
@@ -109,51 +119,79 @@ async function actionExecutionNode(state) {
     case "PROVIDE_NAME": {
       const extractedName = aiData?.user_name || inputText.trim() || "Guest";
       if (!user) user = await registerNewUser(phone, extractedName);
-      replyText = `Splendid to meet you, *${user.fullName}*! 👑\n\nHow may I humbly serve you today?`;
-      interactive = { type: "button", body: { text: replyText }, action: { buttons: [ { type: "reply", reply: { id: "btn_menu", title: "🍔 Order Menu" } }, { type: "reply", reply: { id: "btn_offers", title: "🎁 Offers" } } ] } };
+      
+      replyText = `Aapse milkar accha laga, *${user.fullName}*! 👑\n\nAaj aap kya order karna chahenge?`;
+      interactive = { 
+        type: "button", 
+        body: { text: replyText }, 
+        action: { buttons: [ 
+          { type: "reply", reply: { id: "btn_menu", title: "🍔 Menu" } }, 
+          { type: "reply", reply: { id: "btn_offers", title: "🎁 Offers" } },
+          { type: "reply", reply: { id: "btn_help", title: "ℹ️ Help" } }
+        ] } 
+      };
       break;
     }
     case "GREETING": {
       const hasActiveOrder = await getActiveOrder(user._id);
-      replyText = `👑 *Welcome back, ${user.fullName}!*\n\nHow may I humbly serve you today?`;
-      let buttons = [{ type: "reply", reply: { id: "btn_menu", title: "🍔 Order Menu" } }];
-      if (hasActiveOrder) buttons.push({ type: "reply", reply: { id: "btn_track", title: "📦 Track Order" } });
+      replyText = `👑 *Welcome back, ${user.fullName}!*\n\nThe Galaxy Hotel mein aapka swagat hai.\n\nAaj kya order karna chahenge aap?`;
+      
+      // WhatsApp max 3 buttons allow karta hai
+      let buttons = [{ type: "reply", reply: { id: "btn_menu", title: "🍔 Menu" } }];
+      if (hasActiveOrder) {
+        buttons.push({ type: "reply", reply: { id: "btn_track", title: "📦 Track" } });
+      }
       buttons.push({ type: "reply", reply: { id: "btn_offers", title: "🎁 Offers" } });
+      
+      if (buttons.length < 3) {
+        buttons.push({ type: "reply", reply: { id: "btn_help", title: "ℹ️ Help" } });
+      }
+
       interactive = { type: "button", body: { text: replyText }, action: { buttons } };
       break;
     }
     case "HELP": {
-      replyText = `🎧 *The Galaxy Hotel Support*\n\n📞 Call us: +916262633305\n📧 gmhotelthegalaxy@gmail.com\n\n(Tap the number above to call us directly!)`;
-      interactive = { type: "button", body: { text: replyText }, action: { buttons: [{ type: "reply", reply: { id: "btn_menu", title: "🍔 Back to Menu" } }] } };
+      replyText = `🎧 *Galaxy Hotel Support*\n\n📞 Call karein: +916262633305\n📧 Email: gmhotelthegalaxy@gmail.com\n\n*(Upar diye number par tap karke aap direct call kar sakte hain!)*`;
+      interactive = { 
+        type: "button", 
+        body: { text: replyText }, 
+        action: { buttons: [
+          { type: "reply", reply: { id: "btn_menu", title: "🍔 Menu" } },
+          { type: "reply", reply: { id: "btn_offers", title: "🎁 Offers" } }
+        ] } 
+      };
       break;
     }
     case "SHOW_OFFERS": {
       const offers = await getActiveOffers();
       if (!offers || offers.length === 0) {
-        replyText = "Abhi koi special offer nahi chal raha hai. Kripya baad mein check karein!";
+        replyText = "Abhi koi special offer nahi chal raha hai.\nKripya thodi der baad check karein!";
       } else {
         let offerText = offers.map(o => `🎉 *${o.title || 'Special Offer'}*\n${o.description || ''}\nCode: *${o.code || 'N/A'}*`).join("\n\n");
-        replyText = `🎁 *Today's Royal Offers:*\n\n${offerText}`;
+        replyText = `🎁 *Aaj Ke Special Offers:*\n\n${offerText}`;
       }
-      interactive = { type: "button", body: { text: replyText }, action: { buttons: [{ type: "reply", reply: { id: "btn_menu", title: "🍔 Order Menu" } }] } };
+      interactive = { type: "button", body: { text: replyText }, action: { buttons: [{ type: "reply", reply: { id: "btn_menu", title: "🍔 Menu Dekhein" } }] } };
       break;
     }
     case "SHOW_ALL_TODAY": {
       const items = await getTodayRosterItems();
       if (!items || items.length === 0) {
-        replyText = "Our chefs are preparing today's menu. Please check back shortly!";
+        replyText = "Humare chefs menu prepare kar rahe hain.\nKripya thodi der mein wapas try karein!";
         interactive = { type: "button", body: { text: replyText }, action: { buttons: [{ type: "reply", reply: { id: "btn_menu", title: "🍔 Categories" } }] } };
       } else {
         const menuText = items.slice(0, 40).map(m => `▪️ *${m.name}* - ₹${m.basePrice}`).join("\n");
-        replyText = `📜 *All Available Delicacies Today:*\n\n${menuText}\n\n👉 *Aapko kya order karna hai? (Jaise: '1 ${items[0].name}')*`;
+        replyText = `📜 *Aaj Ke Saare Items:*\n\n${menuText}\n\n👉 *Aapko kya order karna hai?*\n*(Jaise: '1 ${items[0].name}')*`;
       }
       break;
     }
     case "SHOW_MENU": {
       const categories = await getCategories();
-      if (!categories || categories.length === 0) { replyText = "Our chefs are preparing today's royal menu. Please check back shortly!"; break; }
-      const rows = categories.slice(0, 10).map(cat => ({ id: `cat_${cat._id}`, title: cat.name.substring(0, 24), description: "Tap to view delicacies" }));
-      interactive = { type: "list", header: { type: "text", text: "🍽️ The Galaxy Menu" }, body: { text: "Tap the button below to view all our categories 👇" }, action: { button: "📋 View Categories", sections: [{ title: "Our Offerings", rows: rows }] } };
+      if (!categories || categories.length === 0) { 
+        replyText = "Humare chefs menu prepare kar rahe hain.\nKripya thodi der mein try karein!"; 
+        break; 
+      }
+      const rows = categories.slice(0, 10).map(cat => ({ id: `cat_${cat._id}`, title: cat.name.substring(0, 24), description: "Tap karke items dekhein" }));
+      interactive = { type: "list", header: { type: "text", text: "🍽️ The Galaxy Menu" }, body: { text: "Neeche diye gaye button par click karke\ncategory select karein 👇" }, action: { button: "📋 Menu Dekhein", sections: [{ title: "Categories", rows: rows }] } };
       break;
     }
     case "SELECT_CATEGORY": {
@@ -167,17 +205,17 @@ async function actionExecutionNode(state) {
       if (categoryId) categoryItems = await getMenuByCategory(categoryId);
       if (!categoryItems || categoryItems.length === 0) {
         replyText = `Maaf kijiyega, aaj *${categoryName || "is category"}* mein koi item available nahi hai. 👨‍🍳`;
-        interactive = { type: "button", body: { text: replyText }, action: { buttons: [{ type: "reply", reply: { id: "btn_menu", title: "🍔 View All Menu" } }] } };
+        interactive = { type: "button", body: { text: replyText }, action: { buttons: [{ type: "reply", reply: { id: "btn_menu", title: "🍔 Pura Menu Dekhein" } }] } };
       } else {
         const menuText = categoryItems.map(m => `▪️ *${m.name}* - ₹${m.basePrice}`).join("\n");
-        replyText = `📜 *${categoryName || 'Selected'} Delicacies*\n\n${menuText}\n\n👉 *Aapko kya order karna hai? (Jaise: '1 ${categoryItems[0].name}')*`;
+        replyText = `📜 *${categoryName || 'Selected'} Items*\n\n${menuText}\n\n👉 *Aapko kya order karna hai?*\n*(Jaise: '1 ${categoryItems[0].name}')*`;
       }
       break;
     }
     case "ADD_TO_CART": {
       const itemsToAdd = aiData?.extracted_items || [];
       if (itemsToAdd.length === 0) {
-        replyText = "Please specify the exact item and quantity you wish to add.";
+        replyText = "Kripya item ka naam aur quantity theek se likhein.\n(Jaise: '1 Pizza').";
       } else {
         const { cart, messages, setting } = await addItemsToCart(phone, itemsToAdd);
         
@@ -185,58 +223,59 @@ async function actionExecutionNode(state) {
         let subtotal = cart.reduce((sum, item) => sum + item.total, 0);
         let feedbackString = messages.join("\n"); 
         
-        let deliveryMsg = subtotal >= (setting?.freeDeliveryAbove || 500) ? "FREE! 🎉" : `₹${setting?.baseFee || 30} (Base)`;
+        let deliveryMsg = subtotal >= (setting?.freeDeliveryAbove || 500) ? "FREE! 🎉" : `₹${setting?.baseFee || 30}`;
         
-        replyText = `${feedbackString}\n\n🛒 *Your Banquet So Far:*\n${cartSummary}\n\n🧾 Subtotal: ₹${subtotal}\n🚚 Est. Delivery: ${deliveryMsg}\n*(Free delivery above ₹${setting?.freeDeliveryAbove || 500})*\n\nWhat is your next command?`;
+        replyText = `${feedbackString}\n\n🛒 *Aapka Cart:*\n${cartSummary}\n\n🧾 Subtotal: ₹${subtotal}\n🚚 Est. Delivery: ${deliveryMsg}\n*(₹${setting?.freeDeliveryAbove || 500} se upar free delivery!)*\n\nAur kuch chahiye ya checkout karein?`;
         
-        interactive = { type: "button", body: { text: replyText }, action: { buttons: [ { type: "reply", reply: { id: "btn_add_more", title: "➕ Add More" } }, { type: "reply", reply: { id: "btn_checkout", title: "➡️ Checkout" } } ] } };
+        interactive = { type: "button", body: { text: replyText }, action: { buttons: [ { type: "reply", reply: { id: "btn_add_more", title: "➕ Aur Add Karein" } }, { type: "reply", reply: { id: "btn_checkout", title: "➡️ Checkout" } } ] } };
       }
       break;
     }
-
-    // 🔥 BUG FIX: Remove from cart also calculates Settings & Delivery Fee properly
     case "REMOVE_FROM_CART": {
       const itemsToRemove = aiData?.extracted_items || [];
       if (itemsToRemove.length === 0) {
-        replyText = "Please specify the exact item and quantity you wish to remove (e.g., 'Remove 1 Thali').";
-        interactive = { type: "button", body: { text: replyText }, action: { buttons: [{ type: "reply", reply: { id: "btn_menu", title: "🍔 View Menu" } }] } };
+        replyText = "Kripya item aur quantity clear batayein.\n(Jaise: 'Remove 1 Thali').";
+        interactive = { type: "button", body: { text: replyText }, action: { buttons: [{ type: "reply", reply: { id: "btn_menu", title: "🍔 Menu" } }] } };
       } else {
         const { cart, setting } = await removeItemsFromCart(phone, itemsToRemove);
         
         if (!cart || cart.length === 0) {
-          replyText = "🗑️ Item removed successfully. Your cart is now empty!";
-          interactive = { type: "button", body: { text: replyText }, action: { buttons: [{ type: "reply", reply: { id: "btn_menu", title: "🍔 Order Menu" } }] } };
+          replyText = "🗑️ Item remove ho gaya.\nAapka cart ab khali hai!";
+          interactive = { type: "button", body: { text: replyText }, action: { buttons: [{ type: "reply", reply: { id: "btn_menu", title: "🍔 Menu Dekhein" } }] } };
         } else {
           let cartSummary = cart.map(item => `▪️ ${item.quantity}x ${item.name} - ₹${item.total}`).join("\n");
           let subtotal = cart.reduce((sum, item) => sum + item.total, 0);
-          
-          let deliveryMsg = subtotal >= (setting?.freeDeliveryAbove || 500) ? "FREE! 🎉" : `₹${setting?.baseFee || 30} (Base)`;
+          let deliveryMsg = subtotal >= (setting?.freeDeliveryAbove || 500) ? "FREE! 🎉" : `₹${setting?.baseFee || 30}`;
 
-          replyText = `🗑️ Item removed.\n\n🛒 *Updated Banquet:*\n${cartSummary}\n\n🧾 Subtotal: ₹${subtotal}\n🚚 Est. Delivery: ${deliveryMsg}\n*(Free delivery above ₹${setting?.freeDeliveryAbove || 500})*\n\nWhat is your next command?`;
-          
-          interactive = { type: "button", body: { text: replyText }, action: { buttons: [ { type: "reply", reply: { id: "btn_add_more", title: "➕ Add More" } }, { type: "reply", reply: { id: "btn_checkout", title: "➡️ Checkout" } } ] } };
+          replyText = `🗑️ Item remove kar diya gaya hai.\n\n🛒 *Updated Cart:*\n${cartSummary}\n\n🧾 Subtotal: ₹${subtotal}\n🚚 Est. Delivery: ${deliveryMsg}\n*(₹${setting?.freeDeliveryAbove || 500} se upar free delivery!)*\n\nAur kuch chahiye ya checkout karein?`;
+          interactive = { type: "button", body: { text: replyText }, action: { buttons: [ { type: "reply", reply: { id: "btn_add_more", title: "➕ Aur Add" } }, { type: "reply", reply: { id: "btn_checkout", title: "➡️ Checkout" } } ] } };
         }
       }
       break;
     }
-
     case "CHECKOUT": {
       const addresses = await getUserAddresses(user._id);
       if (addresses && addresses.length > 0) {
         const topAddresses = addresses.slice(0, 2); 
         let buttons = topAddresses.map((addr, idx) => {
-          let uniqueTitle = `${idx + 1}. ${addr.label || 'Address'}`.substring(0, 20); 
+          let uniqueTitle = `${idx + 1}. ${addr.label || 'Home'}`.substring(0, 20); 
           return { type: "reply", reply: { id: `addr_${addr._id}`, title: uniqueTitle } };
         });
-        buttons.push({ type: "reply", reply: { id: "btn_new_address", title: "➕ Add NEW" } });
+        buttons.push({ type: "reply", reply: { id: "btn_new_address", title: "➕ Naya Address" } });
 
-        let addressDetails = topAddresses.map((addr, idx) => `*${idx + 1}. ${addr.label || "Address"}*: ${addr.street}, ${addr.landmark}`).join("\n");
-        addressDetails += `\n*${topAddresses.length + 1}.* ➕ Add a NEW Address`;
-        interactive = { type: "button", body: { text: `📍 *Where shall we dispatch your royal feast?*\n\n${addressDetails}\n\nTap a button below or reply with a number to select:` }, action: { buttons } };
-      } else { replyText = "🏠 *New Address*\n\n👉 Please provide your delivery address in this format:\n\nArea: 007, 8th floor bansal one\nLandmark: DB Mall"; }
+        let addressDetails = topAddresses.map((addr, idx) => `*${idx + 1}. ${addr.label || "Home"}*:\n${addr.street}, ${addr.landmark}`).join("\n\n");
+        addressDetails += `\n\n*${topAddresses.length + 1}.* ➕ Ek Naya Address Jodein`;
+        
+        interactive = { type: "button", body: { text: `📍 *Aapka order kahan deliver karna hai?*\n\n${addressDetails}\n\nNeeche diye gaye option se select karein:` }, action: { buttons } };
+      } else { 
+        replyText = "🏠 *Naya Address*\n\nKripya apna delivery address is format mein bhejein:\n\nArea: Lalbagh\nLandmark: PG College ke paas"; 
+      }
       break;
     }
-    case "PROMPT_NEW_ADDRESS": { replyText = "🏠 *New Address*\n\n👉 Please provide your delivery address in this format:\n\nArea: 007, 8th floor bansal one\nLandmark: DB Mall"; break; }
+    case "PROMPT_NEW_ADDRESS": { 
+      replyText = "🏠 *Naya Address*\n\nKripya apna delivery address is format mein bhejein:\n\nArea: Lalbagh\nLandmark: PG College ke paas"; 
+      break; 
+    }
     case "SELECT_SAVED_ADDRESS": {
       let addressId = aiData?.addressId; 
       if (!addressId) {
@@ -245,23 +284,27 @@ async function actionExecutionNode(state) {
         let selectedIdx = (aiData?.address_index || 1) - 1;
         if (inputText.toLowerCase().includes("home")) selectedIdx = 0; 
         if (selectedIdx >= 0 && selectedIdx < topAddresses.length) { addressId = topAddresses[selectedIdx]._id.toString(); } 
-        else { replyText = "🏠 *New Address*\n\n👉 Please provide your delivery address in this format:\n\nArea: 007, 8th floor bansal one\nLandmark: DB Mall"; userContextMemory[phone] = replyText; return { ...state, replyText, interactive: null }; }
+        else { 
+          replyText = "🏠 *Naya Address*\n\nKripya apna delivery address is format mein bhejein:\n\nArea: Lalbagh\nLandmark: PG College ke paas"; 
+          userContextMemory[phone] = replyText; 
+          return { ...state, replyText, interactive: null }; 
+        }
       }
 
       session.addressId = addressId; await session.save();
       const cartItems = session.cart || [];
-      if(cartItems.length === 0) { replyText = "Your cart is empty. Please open the Menu to add items."; break; }
+      if(cartItems.length === 0) { replyText = "Aapka cart khali hai. Pehle menu se items add karein."; break; }
 
       const paymentData = await processBotOrderAndPayment(user._id, phone, cartItems, addressId, null);
       if (paymentData.success) {
         paymentAttemptsMemory[phone] = 0; 
         const selectedAddr = await getUserAddresses(user._id).then(addrs => addrs.find(a => a._id.toString() === addressId));
         
-        replyText = `✅ *Address Confirmed:* ${selectedAddr?.street || 'Home'}\n\n💳 *Online Royal Treasury*\nSubtotal: ₹${paymentData.subtotal.toFixed(2)}\n🚚 Delivery: ₹${paymentData.deliveryCharge.toFixed(2)}\n💰 *Grand Total: ₹${paymentData.totalAmount.toFixed(2)}*\n\n*(Aapka order auto-confirm ho jayega payment successful hote hi!)*`;
+        replyText = `✅ *Address Confirm:*\n${selectedAddr?.street || 'Home'}\n\n💳 *Bill Details:*\nSubtotal: ₹${paymentData.subtotal.toFixed(2)}\n🚚 Delivery: ₹${paymentData.deliveryCharge.toFixed(2)}\n💰 *Grand Total: ₹${paymentData.totalAmount.toFixed(2)}*\n\n*(Payment successful hote hi order confirm ho jayega!)*`;
         
         interactive = { type: "cta_url", body: { text: replyText }, action: { name: "cta_url", parameters: { display_text: `Pay ₹${paymentData.totalAmount.toFixed(2)}`, url: paymentData.paymentUrl } } };
         session.cart = []; await session.save();
-      } else { replyText = "Apologies, there was an issue generating your payment link. Please try again."; }
+      } else { replyText = "Payment link banane mein issue aaya. Kripya thodi der baad try karein."; }
       break;
     }
     case "PROVIDE_ADDRESS": {
@@ -270,24 +313,24 @@ async function actionExecutionNode(state) {
 
       if (!locationCheck.status) {
         replyText = `😔 *Maaf Kijiyega!*\n\n${locationCheck.message}\n\nAap chahein toh koi aur address try kar sakte hain.`;
-        interactive = { type: "button", body: { text: replyText }, action: { buttons: [{ type: "reply", reply: { id: "btn_new_address", title: "🔄 Try New Address" } }] } };
+        interactive = { type: "button", body: { text: replyText }, action: { buttons: [{ type: "reply", reply: { id: "btn_new_address", title: "🔄 Naya Address" } }] } };
         break; 
       }
 
       const newAddr = await saveNewAddress(user._id, extractedAddress, locationCheck.lat, locationCheck.lng);
       session.addressId = newAddr._id; await session.save();
       const cartItems = session.cart || [];
-      if(cartItems.length === 0) { replyText = "Your cart is empty. Please open the Menu to add items."; break; }
+      if(cartItems.length === 0) { replyText = "Aapka cart khali hai. Pehle menu se items add karein."; break; }
 
       const paymentData = await processBotOrderAndPayment(user._id, phone, cartItems, newAddr._id, locationCheck.distanceKm);
       if (paymentData.success) {
         paymentAttemptsMemory[phone] = 0; 
         
-        replyText = `✅ *New Address Saved:* ${newAddr.street}\n\n💳 *Online Royal Treasury*\nSubtotal: ₹${paymentData.subtotal.toFixed(2)}\n🚚 Delivery: ₹${paymentData.deliveryCharge.toFixed(2)}\n💰 *Grand Total: ₹${paymentData.totalAmount.toFixed(2)}*\n\n*(Aapka order auto-confirm ho jayega payment successful hote hi!)*`;
+        replyText = `✅ *Naya Address Save Hua:*\n${newAddr.street}\n\n💳 *Bill Details:*\nSubtotal: ₹${paymentData.subtotal.toFixed(2)}\n🚚 Delivery: ₹${paymentData.deliveryCharge.toFixed(2)}\n💰 *Grand Total: ₹${paymentData.totalAmount.toFixed(2)}*\n\n*(Payment successful hote hi order confirm ho jayega!)*`;
         
         interactive = { type: "cta_url", body: { text: replyText }, action: { name: "cta_url", parameters: { display_text: `Pay ₹${paymentData.totalAmount.toFixed(2)}`, url: paymentData.paymentUrl } } };
         session.cart = []; await session.save();
-      } else { replyText = "Apologies, there was an issue generating your payment link. Please try again."; }
+      } else { replyText = "Payment link banane mein issue aaya. Kripya thodi der baad try karein."; }
       break;
     }
     case "TRACK_ORDER": {
@@ -295,41 +338,54 @@ async function actionExecutionNode(state) {
       if (orderToTrack) {
         const orderStatus = orderToTrack.status ? orderToTrack.status.toLowerCase() : "processing";
         const amount = orderToTrack.totalAmount || orderToTrack.pricing?.total || 0;
-        replyText = `📦 *Your Active Order*\n\n🔖 Order ID: ${orderToTrack.orderNumber || orderToTrack._id}\n📊 Status: *${orderStatus.toUpperCase()}*\n💰 Amount: ₹${amount.toFixed(2)}\n\n`;
-        if (["dispatched", "out_for_delivery"].includes(orderStatus) && orderToTrack.deliveryBoy) { replyText += `🛵 *Your Order is Arriving!*\nRider: ${orderToTrack.deliveryBoy.name || "Executive"}\n📞 Contact: ${orderToTrack.deliveryBoy.phone}\n\n`; } 
-        else { replyText += `👨‍🍳 Our royal chefs are presently crafting your meal.\n\n`; }
+        replyText = `📦 *Aapka Active Order*\n\n🔖 Order ID: ${orderToTrack.orderNumber || orderToTrack._id}\n📊 Status: *${orderStatus.toUpperCase()}*\n💰 Amount: ₹${amount.toFixed(2)}\n\n`;
+        if (["dispatched", "out_for_delivery"].includes(orderStatus) && orderToTrack.deliveryBoy) { 
+          replyText += `🛵 *Delivery Boy raste mein hai!*\nNaam: ${orderToTrack.deliveryBoy.name || "Executive"}\n📞 Contact: ${orderToTrack.deliveryBoy.phone}\n\n`; 
+        } else { 
+          replyText += `👨‍🍳 Humare chefs aapka khana prepare kar rahe hain.\n\n`; 
+        }
+        
         const uncancelableStatuses = ["confirmed", "preparing", "dispatched", "out_for_delivery", "delivered"];
-        let buttons = [{ type: "reply", reply: { id: "btn_add_more", title: "🍔 Order More" } }];
-        if (!uncancelableStatuses.includes(orderStatus)) { buttons.push({ type: "reply", reply: { id: "btn_cancel_order", title: "❌ Cancel Order" } }); }
+        let buttons = [{ type: "reply", reply: { id: "btn_add_more", title: "🍔 Aur Order Karein" } }];
+        if (!uncancelableStatuses.includes(orderStatus)) { 
+          buttons.push({ type: "reply", reply: { id: "btn_cancel_order", title: "❌ Cancel Order" } }); 
+        }
         interactive = { type: "button", body: { text: replyText }, action: { buttons } };
       } else {
-        replyText = "Forgive me, but I do not see any active orders for you at this moment.";
-        interactive = { type: "button", body: { text: replyText }, action: { buttons: [{ type: "reply", reply: { id: "btn_menu", title: "🍔 Order Menu" } }] } };
+        replyText = "Aapka koi active order nahi hai abhi.";
+        interactive = { type: "button", body: { text: replyText }, action: { buttons: [{ type: "reply", reply: { id: "btn_menu", title: "🍔 Menu Dekhein" } }] } };
       }
       break;
     }
     case "CANCEL_ORDER": {
       const cancelledOrder = await cancelOrder(user._id);
-      if (cancelledOrder) { replyText = `✅ *Order Cancelled Successfully*\n\nAs you command, your order has been halted.`; } 
-      else { replyText = `❌ *Cannot Cancel Order*\n\nI humbly apologize, but you either have no active order, or it has progressed too far to be cancelled now.`; }
-      interactive = { type: "button", body: { text: replyText }, action: { buttons: [{ type: "reply", reply: { id: "btn_menu", title: "🍔 Order Menu" } }] } };
+      if (cancelledOrder) { 
+        replyText = `✅ *Order Cancelled*\n\nAapka order cancel kar diya gaya hai.`; 
+      } else { 
+        replyText = `❌ *Cancel Nahi Ho Sakta*\n\nMaaf kijiyega, ya toh order active nahi hai, ya phir khana ban chuka hai.`; 
+      }
+      interactive = { type: "button", body: { text: replyText }, action: { buttons: [{ type: "reply", reply: { id: "btn_menu", title: "🍔 Menu" } }] } };
       break;
     }
     case "COMPLETE_ORDER": {
       const paymentCheck = await checkLatestPaymentStatus(user._id);
-      if (!paymentCheck.found) { replyText = "I couldn't find any pending orders. Start a new order below."; interactive = { type: "button", body: { text: replyText }, action: { buttons: [{ type: "reply", reply: { id: "btn_menu", title: "🍔 Order Menu" } }] } }; break; }
+      if (!paymentCheck.found) { 
+        replyText = "Mujhe aapka koi pending order nahi mila.\nNaya order place karein."; 
+        interactive = { type: "button", body: { text: replyText }, action: { buttons: [{ type: "reply", reply: { id: "btn_menu", title: "🍔 Menu" } }] } }; 
+        break; 
+      }
       if (paymentCheck.isPaid) {
         paymentAttemptsMemory[phone] = 0; 
-        replyText = `🎉 *Payment Confirmed!*\n\nOrder ID: *${paymentCheck.orderNumber}*\n\nOur grand chefs are firing up the ovens! 👨‍🍳🔥`;
+        replyText = `🎉 *Payment Confirm Ho Gaya!*\n\nOrder ID: *${paymentCheck.orderNumber}*\n\nHumare chefs ne preparation start kar di hai! 👨‍🍳🔥`;
         interactive = { type: "button", body: { text: replyText }, action: { buttons: [{ type: "reply", reply: { id: "btn_track", title: "📦 Track Order" } }] } };
       } else {
         let attempts = (paymentAttemptsMemory[phone] || 0) + 1; paymentAttemptsMemory[phone] = attempts; 
         if (attempts >= 3) {
           await cancelOrder(user._id); paymentAttemptsMemory[phone] = 0; 
-          replyText = `❌ *Order Cancelled*\n\nWe haven't received payment after 3 attempts. Your order has been cancelled for security reasons.`;
-          interactive = { type: "button", body: { text: replyText }, action: { buttons: [{ type: "reply", reply: { id: "btn_menu", title: "🍔 Order Menu" } }] } };
+          replyText = `❌ *Order Cancelled*\n\n3 attempts ke baad bhi payment receive nahi hua.\nSecurity reason se order cancel ho gaya hai.`;
+          interactive = { type: "button", body: { text: replyText }, action: { buttons: [{ type: "reply", reply: { id: "btn_menu", title: "🍔 Menu" } }] } };
         } else {
-          replyText = `⚠️ *Payment Not Received Yet*\n\nI just checked the treasury, but payment hasn't reflected yet. *(Attempt ${attempts}/3)*\n\nPlease pay using the link provided above, then type "paid" again.`;
+          replyText = `⚠️ *Payment Pending*\n\nAbhi tak payment system mein nahi aayi hai. *(Attempt ${attempts}/3)*\n\nKripya upar diye gaye link se pay karein, aur fir "paid" type karein.`;
         }
       }
       break;
@@ -339,19 +395,21 @@ async function actionExecutionNode(state) {
       const recentOrders = await Order.find({ user: user._id }).sort({ createdAt: -1 }).limit(5).lean();
 
       if (stats && stats.totalOrders > 0) { 
-        replyText = `📜 *Your Royal History*\n\n🛍️ Total Orders: *${stats.totalOrders}*\n💎 Total Spent: *₹${stats.totalSpent.toFixed(2)}*\n\n*🕒 Last 5 Orders:*\n`;
+        replyText = `📜 *Aapki Order History*\n\n🛍️ Total Orders: *${stats.totalOrders}*\n💎 Total Spent: *₹${stats.totalSpent.toFixed(2)}*\n\n*🕒 Pichle 5 Orders:*\n`;
         recentOrders.forEach((o, i) => {
            const date = new Date(o.createdAt).toLocaleDateString("en-IN");
            const itemsStr = o.items.map(it => `${it.quantity}x ${it.name}`).join(", ");
            replyText += `${i+1}. *${date}* - ₹${o.totalAmount.toFixed(2)} (${o.status.toUpperCase()})\n   📝 _${itemsStr}_\n\n`;
         });
-      } else { replyText = "You have not yet graced us with a completed order, my lord."; }
-      interactive = { type: "button", body: { text: replyText }, action: { buttons: [{ type: "reply", reply: { id: "btn_menu", title: "🍔 Order Menu" } }] } };
+      } else { 
+        replyText = "Aapne abhi tak koi order place nahi kiya hai."; 
+      }
+      interactive = { type: "button", body: { text: replyText }, action: { buttons: [{ type: "reply", reply: { id: "btn_menu", title: "🍔 Menu" } }] } };
       break;
     }
     default: {
-      replyText = "My deepest apologies, esteemed guest, I didn't quite catch that. How may I help you?";
-      interactive = { type: "button", body: { text: replyText }, action: { buttons: [{ type: "reply", reply: { id: "btn_menu", title: "🍔 Menu" } }, { type: "reply", reply: { id: "btn_track", title: "📦 Track" } }] } };
+      replyText = "Maaf kijiyega, main samajh nahi paya.\nMain aapki kya madad kar sakta hoon?";
+      interactive = { type: "button", body: { text: replyText }, action: { buttons: [{ type: "reply", reply: { id: "btn_menu", title: "🍔 Menu" } }, { type: "reply", reply: { id: "btn_track", title: "📦 Track" } }, { type: "reply", reply: { id: "btn_help", title: "ℹ️ Help" } }] } };
     }
   }
 

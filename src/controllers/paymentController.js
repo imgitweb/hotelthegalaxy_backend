@@ -3,7 +3,7 @@ const crypto = require("crypto");
 const Order = require("../models/User/ordersModel");
 const Payment = require("../models/paymentModel");
 const Address = require("../models/User/address");
-const {sendTextMessage} = require("../langraph/services/whatsappService")
+const {sendTextMessage , sendInteractiveMessage } = require("../langraph/services/whatsappService")
 
 exports.createOrder = async (req, res, next) => {
   try {
@@ -249,6 +249,8 @@ exports.handleCancel = async (req, res, next) => {
   }
 };
 
+
+
 exports.handleWebhook = async (req, res) => {
   console.log("🔥 WEBHOOK ROUTE HIT!"); 
 
@@ -332,11 +334,34 @@ exports.handleWebhook = async (req, res) => {
                 // Pehle Razorpay ke amount ko convert karenge (best accuracy), agar wo na mile toh database ke pricing object se lenge.
                 const finalAmount = (paymentData.amount / 100) || updatedOrder.pricing?.total || updatedOrder.totalAmount || 0;
                 
-                // Message ka format
-                const successMsg = `🎉 *Payment Successful!*\n\nNamaste! Aapka order *${orderNumber}* confirm ho gaya hai.\n💰 Amount Paid: ₹${finalAmount}\n\n👨‍🍳 Our grand chefs are now preparing your delicious meal. Hum jald hi ise dispatch karenge!`;
+                // 🔥 UPDATED: Simple, Short, aur Hinglish Message
+                const successMsg = `🎉 *Payment Confirm Ho Gaya!*\n\nAapka order *${orderNumber}* confirm ho gaya hai.\n\n💰 Amount Paid: ₹${finalAmount}\n\nHumare chefs ne aapka khana banana shuru kar diya hai. 👨‍🍳🔥`;
                 
-                // WhatsApp message function call
-                await sendTextMessage(userPhone, successMsg);
+                // WhatsApp message function call (Ensure karein ki aapne sendInteractiveMessage / sendTextMessage upar import kiya ho)
+                // Hum yahan interactive button wala message bhejenge taaki user direct Track kar sake
+                
+                const interactiveMsg = {
+                  type: "button",
+                  body: { text: successMsg },
+                  action: {
+                    buttons: [
+                      { type: "reply", reply: { id: "btn_track", title: "📦 Track Order" } },
+                      { type: "reply", reply: { id: "btn_menu", title: "🍔 Menu" } }
+                    ]
+                  }
+                };
+
+                // Assuming aapke paas sendInteractiveMessage function webhook controller mein available/imported hai
+                // Agar nahi hai, toh upar import kar lijiye: 
+                // const { sendInteractiveMessage } = require('../services/whatsappService');
+                
+                try {
+                  await sendInteractiveMessage(userPhone, interactiveMsg);
+                  console.log(`✅ Success WhatsApp message sent to ${userPhone}`);
+                } catch (whatsappErr) {
+                  console.error("❌ Failed to send WhatsApp success message:", whatsappErr);
+                }
+
             } else {
                 console.log("⚠️ Phone number nahi mila, WhatsApp message nahi bheja.");
             }
@@ -371,6 +396,133 @@ exports.handleWebhook = async (req, res) => {
     return res.status(500).json({ error: 'Internal server error' }); 
   }
 };
+
+
+
+// exports.handleWebhook = async (req, res) => {
+//   console.log("🔥 WEBHOOK ROUTE HIT!"); 
+
+//   try {
+//     const webhookSignature = req.headers['x-razorpay-signature'];
+//     const WEBHOOK_SECRET = process.env.RAZORPAY_WEBHOOK_SECRET || 'qwertyuiop123'; // Apni .env se match karna
+
+//     const rawBody = req.body.toString('utf8');
+
+//     const expectedSignature = crypto
+//       .createHmac("sha256", WEBHOOK_SECRET)
+//       .update(rawBody)
+//       .digest("hex");
+
+//     if (expectedSignature !== webhookSignature) {
+//       console.log('❌ Invalid webhook signature!');
+//       return res.status(400).json({ error: 'Invalid signature' });
+//     }
+
+//     console.log('✅ Webhook Signature verified successfully!');
+
+//     const payload = JSON.parse(rawBody);
+//     const eventType = payload.event;
+    
+//     // Razorpay ki taraf se bheja gaya entity data
+//     const paymentData = payload.payload.payment.entity; 
+
+//     // 🔥 MAIN FIX: Razorpay Order ID ki jagah hum apne notes se dbOrderId nikalenge
+//     const dbOrderId = paymentData.notes ? paymentData.notes.dbOrderId : null;
+
+//     if (!dbOrderId) {
+//       console.log("⚠️ Webhook received but no dbOrderId found in notes. Skipping.");
+//       return res.status(200).json({ status: 'ok' });
+//     }
+
+//     // 4. Handle Events
+//     if (eventType === 'payment.captured' || eventType === 'payment_link.paid') {
+//       console.log(`💰 Payment captured for MongoDB Order: ${dbOrderId}`);
+      
+//       // 🔥 Yahan hum apne database ID se payment find kar rahe hain
+//       const payment = await Payment.findOne({ order: dbOrderId });
+
+//       if (payment && payment.status !== "SUCCESS") { 
+//         // 1. Update Payment Table
+//         await Payment.findByIdAndUpdate(payment._id, {
+//           status: "SUCCESS",
+//           transactionId: paymentData.id,
+//           "metadata.razorpayPaymentId": paymentData.id,
+//           "metadata.paymentMethod": paymentData.method || "unknown",
+//           "metadata.razorpayStatus": paymentData.status,
+//         });
+
+//         // 2. Update Order Table (🔥 Yahan { new: true } lagaya taaki updated data return ho)
+//         const updatedOrder = await Order.findByIdAndUpdate(dbOrderId, {
+//           "payment.status": "paid", 
+//           "payment.transactionId": paymentData.id,
+//           "payment.method": paymentData.method || "razorpay",
+//           status: "confirmed",
+//           "timeline.confirmedAt": new Date(),
+//         }, { new: true }); 
+        
+//         console.log(`✅ DATABASE UPDATED: Order ${dbOrderId} is now PAID!`);
+
+//         console.log("update .......................................................................................................", updatedOrder)
+
+//         // 🔥 3. WHATSAPP MESSAGE LOGIC 🔥
+//         if (updatedOrder) {
+//             // Notes se ya DB se phone number nikalo
+//             let userPhone = paymentData.notes?.phone || updatedOrder.address?.phone;
+            
+//             if (userPhone) {
+//                 // WhatsApp API format ke hisaab se number ko format karna
+//                 userPhone = userPhone.toString().replace(/\D/g, ''); 
+//                 if (userPhone.length === 10) {
+//                     userPhone = "91" + userPhone; 
+//                 }
+
+//                 const orderNumber = updatedOrder.orderNumber || updatedOrder._id;
+                
+//                 // 🔥 THE FIX: Amount calculation
+//                 // Pehle Razorpay ke amount ko convert karenge (best accuracy), agar wo na mile toh database ke pricing object se lenge.
+//                 const finalAmount = (paymentData.amount / 100) || updatedOrder.pricing?.total || updatedOrder.totalAmount || 0;
+                
+//                 // Message ka format
+//                 const successMsg = `🎉 *Payment Successful!*\n\nNamaste! Aapka order *${orderNumber}* confirm ho gaya hai.\n💰 Amount Paid: ₹${finalAmount}\n\n👨‍🍳 Our grand chefs are now preparing your delicious meal. Hum jald hi ise dispatch karenge!`;
+                
+//                 // WhatsApp message function call
+//                 await sendTextMessage(userPhone, successMsg);
+//             } else {
+//                 console.log("⚠️ Phone number nahi mila, WhatsApp message nahi bheja.");
+//             }
+//         }
+
+//       } else {
+//         console.log(`ℹ️ Payment already marked as SUCCESS or not found.`);
+//       }
+//     } 
+//     else if (eventType === 'payment.failed') {
+//       console.log(`❌ Payment failed for MongoDB Order: ${dbOrderId}`);
+      
+//       const payment = await Payment.findOne({ order: dbOrderId });
+
+//       if (payment) {
+//         await Payment.findByIdAndUpdate(payment._id, {
+//           status: "FAILED",
+//           "metadata.failureReason": paymentData.error_description || "Webhook reported failure",
+//         });
+
+//         await Order.findByIdAndUpdate(dbOrderId, {
+//           "payment.status": "failed",
+//         });
+//       }
+//     }
+
+//     // 5. Success Response
+//     return res.status(200).json({ status: 'ok' });
+
+//   } catch (error) {
+//     console.error('Webhook processing error:', error);
+//     return res.status(500).json({ error: 'Internal server error' }); 
+//   }
+// };
+
+
 
 
 // exports.handleWebhook = async (req, res) => {
