@@ -1,38 +1,43 @@
 const User = require("../models/User");
 const jwt = require("jsonwebtoken");
 const { generateOTP, hashOTP } = require("../utils/otp");
-const { sendOTP } = require("../services/smsService");
 const { sendAuthTemplate } = require("../utils/whatsaap/sendAuthTemplate");
+const { normalizePhone } = require("../utils/normalizePhone");
+
 const MAX_OTP_REQUESTS = Number(process.env.OTP_MAX_REQUESTS_PER_HOUR) || 5;
 const OTP_COOLDOWN =
   Number(process.env.OTP_RESEND_COOLDOWN_SECONDS || 60) * 1000;
-const OTP_EXPIRY = Number(process.env.OTP_EXPIRY_MINUTES || 5) * 60 * 1000;
+const OTP_EXPIRY =
+  Number(process.env.OTP_EXPIRY_MINUTES || 5) * 60 * 1000;
 const ONE_HOUR = 60 * 60 * 1000;
-const normalizePhone = (phone) => phone.replace(/\D/g, "");
 
 exports.sendOtp = async (req, res) => {
   try {
-    const { fullName, phone, email } = req.body;
-    phone = normalizePhone(phone);
+    const { phone } = req.body;
+
     if (!phone) {
       return res.status(400).json({
         success: false,
         message: "Phone number is required",
       });
     }
- 
-    let user = await User.findOne({ phone }).select(
+
+    const normalizedPhone = normalizePhone(phone);
+
+    let user = await User.findOne({ phone: normalizedPhone }).select(
       "+otpLastRequestedAt +otpRequestCount +otpRequestWindowStartedAt"
     );
-if (!user) {
-  return res.status(404).json({
-    success: false,
-    message: "User not found, please sign up",
-  });
-}
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found, please sign up",
+      });
+    }
+
     const now = Date.now();
 
- 
+    // Cooldown
     if (
       user.otpLastRequestedAt &&
       now - user.otpLastRequestedAt.getTime() < OTP_COOLDOWN
@@ -42,7 +47,8 @@ if (!user) {
         message: "Please wait before requesting OTP again",
       });
     }
- 
+
+    // Reset window
     if (
       !user.otpRequestWindowStartedAt ||
       now - user.otpRequestWindowStartedAt.getTime() > ONE_HOUR
@@ -51,14 +57,13 @@ if (!user) {
       user.otpRequestCount = 0;
     }
 
-   
     if (user.otpRequestCount >= MAX_OTP_REQUESTS) {
       return res.status(429).json({
         success: false,
         message: "Too many OTP requests. Try again later.",
       });
     }
- 
+
     const otp = generateOTP();
     const hashedOtp = hashOTP(otp);
 
@@ -68,12 +73,14 @@ if (!user) {
     user.otpRequestCount += 1;
 
     await user.save();
- 
-    const whatsappResponse = await sendAuthTemplate(phone, otp);
+
+    // ✅ WhatsApp uses + format
+    const whatsappResponse = await sendAuthTemplate(
+      "+" + normalizedPhone,
+      otp
+    );
 
     if (!whatsappResponse.success) {
-      console.error("❌ WhatsApp Send Failed:", whatsappResponse.error);
-
       return res.status(500).json({
         success: false,
         message: "Failed to send OTP via WhatsApp",
@@ -82,21 +89,20 @@ if (!user) {
 
     return res.status(200).json({
       success: true,
-      message: "OTP sent successfully on WhatsApp",
+      message: "OTP sent successfully",
     });
-
   } catch (error) {
     console.error("SEND OTP ERROR:", error);
-
     return res.status(500).json({
       success: false,
       message: "Failed to send OTP",
     });
   }
 };
+
 exports.sendSignupOtp = async (req, res) => {
   try {
-    let { fullName, phone, email } = req.body;
+    const { fullName, phone, email } = req.body;
 
     if (!phone || !fullName) {
       return res.status(400).json({
@@ -105,9 +111,11 @@ exports.sendSignupOtp = async (req, res) => {
       });
     }
 
-   
-   phone = normalizePhone(phone);
-    const existingUser = await User.findOne({ phone });
+    const normalizedPhone = normalizePhone(phone);
+
+    const existingUser = await User.findOne({
+      phone: normalizedPhone,
+    });
 
     if (existingUser) {
       return res.status(400).json({
@@ -118,7 +126,7 @@ exports.sendSignupOtp = async (req, res) => {
 
     const user = new User({
       fullName,
-      phone,
+      phone: normalizedPhone,
       email: email || null,
     });
 
@@ -133,7 +141,11 @@ exports.sendSignupOtp = async (req, res) => {
     user.otpRequestCount = 1;
 
     await user.save();
-    const whatsappResponse = await sendAuthTemplate(`+${phone}`, otp);
+
+    const whatsappResponse = await sendAuthTemplate(
+      "+" + normalizedPhone,
+      otp
+    );
 
     if (!whatsappResponse.success) {
       return res.status(500).json({
@@ -146,7 +158,6 @@ exports.sendSignupOtp = async (req, res) => {
       success: true,
       message: "Signup OTP sent",
     });
-
   } catch (error) {
     console.error("SIGNUP OTP ERROR:", error);
     return res.status(500).json({
@@ -155,22 +166,24 @@ exports.sendSignupOtp = async (req, res) => {
     });
   }
 };
+
 exports.verifyOtp = async (req, res) => {
   try {
-    let { phone, otp } = req.body;
-
-    phone = normalizePhone(phone);
+    const { phone, otp } = req.body;
 
     if (!phone || !otp) {
       return res.status(400).json({
-        success: false, 
+        success: false,
         message: "Phone and OTP required",
       });
     }
 
-    const user = await User.findOne({ phone }).select(
-      "+otp +otpExpiresAt +otpAttempts",
-    );
+    const normalizedPhone = normalizePhone(phone);
+
+    const user = await User.findOne({
+      phone: normalizedPhone,
+    }).select("+otp +otpExpiresAt +otpAttempts");
+
     if (!user) {
       return res.status(404).json({
         success: false,
@@ -222,13 +235,13 @@ exports.verifyOtp = async (req, res) => {
     const accessToken = jwt.sign(
       { id: user._id, phone: user.phone },
       process.env.JWT_ACCESS_SECRET,
-      { expiresIn: "7d" },
+      { expiresIn: "7d" }
     );
 
     const refreshToken = jwt.sign(
       { id: user._id },
       process.env.JWT_REFRESH_SECRET,
-      { expiresIn: "30d" },
+      { expiresIn: "30d" }
     );
 
     return res.status(200).json({
@@ -239,7 +252,7 @@ exports.verifyOtp = async (req, res) => {
       user: {
         id: user._id,
         fullName: user.fullName,
-        phone: user.phone,
+        phone: user.phone, // ✅ always without +
         email: user.email,
       },
     });
@@ -251,26 +264,7 @@ exports.verifyOtp = async (req, res) => {
     });
   }
 };
-exports.AddAddress = async (re, res) => {
-  try {
-  } catch (error) {
-    console.error("Something went wrong!", error);
-    return res.status(500).json({
-      success: false,
-      message: "Internal server error !",
-    });
-  }
-};
-exports.getAddress = async (req, res) => {
-  try {
-  } catch (error) {
-    console.error("Something went wrong!", error);
-    return res.status(500).json({
-      success: false,
-      message: "Internal server error !",
-    });
-  }
-};
+
 exports.updateProfile = async (req, res) => {
   try {
     const { fullName, email } = req.body;
