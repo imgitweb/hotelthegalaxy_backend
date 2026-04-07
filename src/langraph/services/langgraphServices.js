@@ -1,35 +1,44 @@
 const { buildOrderGraph } = require("../graph/orderGraph");
-const { sendTextMessage } = require("./whatsappService");
+const { sendTextMessage, sendInteractiveMessage } = require("./whatsappService");
 
 const graph = buildOrderGraph();
 
 function normalizePhone(phone) {
   if (!phone) return null;
+  if (phone.startsWith("web_")) return phone; 
   return String(phone).replace(/[^\d]/g, "");
 }
 
-async function runLangGraph({ phone, text, mode = "whatsapp" }) {
-  console.log("Running LangGraph with:", { phone, text, mode });
+async function runLangGraph({ phone, text, channel = "whatsapp" }) {
+  const normalizedPhone = normalizePhone(phone);
+  if (!normalizedPhone) return;
 
-  const output = await graph.invoke({
-    phone,
-    inputText: text,
-  });
+  try {
+    const output = await graph.invoke({
+      phone: normalizedPhone,
+      inputText: text,
+    });
 
-  console.log("✅ LangGraph output:", output);
+    console.log(`✅ LangGraph output for ${channel}:`, output);
 
-  // ✅ ONLY send WhatsApp message in whatsapp mode
-  if (mode === "whatsapp" && output?.replyText) {
-    const waPhone = normalizePhone(phone);
-    if (!waPhone || waPhone.length < 10) {
-      console.log("⚠️ Skipping WhatsApp send, invalid phone:", phone);
-    } else {
-      await sendTextMessage(waPhone, output.replyText);
+    if (channel === "whatsapp") {
+      try {
+        // 🔥 Agar state mein interactive data hai toh button/list bhejo
+        if (output.interactive) {
+          await sendInteractiveMessage(normalizedPhone, output.interactive);
+        } else if (output.replyText) {
+          await sendTextMessage(normalizedPhone, output.replyText);
+        }
+      } catch (sendError) {
+        console.error("❌ Failed to send WhatsApp message");
+      }
     }
-  }
 
-  // ✅ Always return output for web / API
-  return output;
+    return output; 
+  } catch (graphError) {
+    console.error("❌ LangGraph execution failed:", graphError);
+    throw graphError; 
+  }
 }
 
 module.exports = { runLangGraph };
