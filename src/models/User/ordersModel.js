@@ -188,6 +188,35 @@ const orderSchema = new mongoose.Schema(
       default: null,
     },
 
+    tripId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Trip",
+      default: null,
+    },
+
+    deliveryOTP: {
+      code: {
+        type: String,
+        default: null,
+      },
+      generatedAt: {
+        type: Date,
+        default: null,
+      },
+      verifiedAt: {
+        type: Date,
+        default: null,
+      },
+      attempts: {
+        type: Number,
+        default: 0,
+      },
+      maxAttempts: {
+        type: Number,
+        default: 3,
+      },
+    },
+
     status: {
       type: String,
       enum: [
@@ -195,6 +224,7 @@ const orderSchema = new mongoose.Schema(
         "confirmed",
         "preparing",
         "out_for_delivery",
+        "arrived",
         "delivered",
         "cancelled",
       ],
@@ -232,6 +262,7 @@ const orderSchema = new mongoose.Schema(
       preparingAt: Date,
       readyAt: Date,
       pickedAt: Date,
+      arrivedAt: Date,
       deliveredAt: Date,
       cancelledAt: Date,
     },
@@ -250,6 +281,12 @@ const orderSchema = new mongoose.Schema(
         type: String,
         default: null,
       },
+    },
+
+    source: {
+      type: String,
+      enum: ["website", "whatsapp"],
+      default: "website",
     },
 
     noContact: {                  // ✅ fix: checkout page sends this but field missing tha

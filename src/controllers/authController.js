@@ -169,8 +169,7 @@ exports.sendSignupOtp = async (req, res) => {
 
 exports.verifyOtp = async (req, res) => {
   try {
-    const { phone, otp } = req.body;
-
+    const { phone, otp } = req.body;    console.log("👤 User OTP verification for phone:", phone);
     if (!phone || !otp) {
       return res.status(400).json({
         success: false,
@@ -270,7 +269,7 @@ exports.updateProfile = async (req, res) => {
     const { fullName, email } = req.body;
 
     const user = await User.findByIdAndUpdate(
-      req.user.id,
+      req.userId,
       { fullName, email },
       { new: true },
     );
