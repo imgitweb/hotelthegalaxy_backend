@@ -28,7 +28,7 @@ function calculateDistance(lat1, lon1, lat2, lon2) {
 async function verifyDeliveryLocation(area, landmark) {
   try {
     const GOOGLE_API_KEY = process.env.GOOGLE_MAPS_API_KEY;
-    const MAX_DISTANCE_KM = parseFloat(process.env.MAX_DISTANCE_KM) || 5;
+    const MAX_DISTANCE_KM = parseFloat(process.env.MAX_DISTANCE_KM) || 6;
     const HOTEL_LAT = process.env.HOTEL_LAT || 22.061401;
     const HOTEL_LNG = process.env.HOTEL_LNG || 78.94776;
 
@@ -61,6 +61,46 @@ async function verifyDeliveryLocation(area, landmark) {
   } catch (error) { return { status: false, message: "Location check karne mein technical error aaya." }; }
 }
 
+async function verifyLocationByCoords(lat, lng) {
+  try {
+    const GOOGLE_API_KEY = process.env.GOOGLE_MAPS_API_KEY;
+    const MAX_DISTANCE_KM = parseFloat(process.env.MAX_DISTANCE_KM) || 6;
+    const HOTEL_LAT = process.env.HOTEL_LAT || 22.061401;
+    const HOTEL_LNG = process.env.HOTEL_LNG || 78.94776;
+
+    const distRes = await axios.get("https://maps.googleapis.com/maps/api/distancematrix/json", {
+      params: { origins: `${HOTEL_LAT},${HOTEL_LNG}`, destinations: `${lat},${lng}`, key: GOOGLE_API_KEY },
+    });
+
+    const element = distRes.data.rows[0].elements[0];
+    if (element.status !== "OK") return { status: false, message: "Distance calculate karne mein issue aaya." };
+
+    const distanceKm = element.distance.value / 1000;
+    const distanceText = element.distance.text;
+
+    if (distanceKm > MAX_DISTANCE_KM) {
+      return { status: false, message: `Aapki location hotel se *${distanceText}* door hai. Humari max delivery range *${MAX_DISTANCE_KM}km* hai.` };
+    }
+
+    const geoRes = await axios.get("https://maps.googleapis.com/maps/api/geocode/json", {
+      params: { latlng: `${lat},${lng}`, key: GOOGLE_API_KEY },
+    });
+
+    let formattedAddress = "Shared via WhatsApp";
+    if (geoRes.data.status === "OK" && geoRes.data.results.length > 0) {
+      formattedAddress = geoRes.data.results[0].formatted_address;
+    }
+
+    if (!formattedAddress.toLowerCase().includes("chhindwara")) {
+      return { status: false, message: `Humari delivery sirf Chhindwara city ke andar available hai.` };
+    }
+
+    return { status: true, lat, lng, formattedAddress, distanceKm };
+  } catch (error) {
+    return { status: false, message: "Location check karne mein technical error aaya." };
+  }
+}
+
 async function checkUserExists(phone) { return await User.findOne({ phone }); }
 async function registerNewUser(phone, fullName) { return await User.create({ phone, role: "customer", fullName: fullName || "Guest", authProvider: "whatsapp", isActive: true }); }
 async function getOrCreateSession(phone) { let session = await Session.findOne({ phone }); if (!session) session = await Session.create({ phone, cart: [] }); return session; }
@@ -74,12 +114,31 @@ async function getTodayRosterItems() {
   return roster.items.filter(item => item.id && item.quantity > 0).map(item => ({ _id: item.id._id, name: item.id.name, basePrice: item.id.basePrice, category: item.id.category, maxAllowed: item.quantity, availableNow: item.quantity }));
 }
 
-// 🔥 NAYA: Search Function
+// 🔥 Smart Search
 async function searchTodayRosterItems(searchTerm) {
   if (!searchTerm) return [];
   const term = searchTerm.toLowerCase().trim();
   const allItems = await getTodayRosterItems();
   return allItems.filter(item => item.name.toLowerCase().includes(term));
+}
+
+// 🔥 Smart Categories
+async function getAvailableCategoriesToday() {
+  try {
+    const rosterItems = await getTodayRosterItems();
+    if (!rosterItems.length) return [];
+
+    const rosterItemIds = rosterItems.map(item => item._id);
+    const menuItems = await MenuItem.find({ _id: { $in: rosterItemIds } }).lean();
+    
+    const subCatIds = [...new Set(menuItems.map(m => String(m.subCategory)))];
+    const subCats = await SubCategory.find({ _id: { $in: subCatIds } }).lean();
+    
+    const categoryIds = [...new Set(subCats.map(sc => String(sc.category)))];
+    return await Category.find({ _id: { $in: categoryIds }, isActive: true }).lean();
+  } catch (error) {
+    return [];
+  }
 }
 
 async function getMenuByCategory(categoryId) { 
@@ -116,7 +175,6 @@ async function addItemsToCart(phone, items) {
     const name = String(it.name || "").toLowerCase(); const qtyRequested = Math.max(1, parseInt(it.quantity || it.qty || 1));
     const rosterItem = rosterItems.find((m) => m.name.toLowerCase().includes(name));
     
-    // Exact match failed, try partial
     if (!rosterItem) { 
       const partialMatch = rosterItems.find(m => m.name.toLowerCase() === name);
       if(!partialMatch) {
@@ -270,9 +328,11 @@ async function getActiveOffers() {
   } catch (error) { return []; }
 }
 
+// 🔥 EXPORTING ALL REQUIRED FUNCTIONS
 module.exports = {
   checkUserExists, registerNewUser, getOrCreateSession, getActiveOrder, getActiveOffers,
-  getCategories, getMenuByCategory, getUserAddresses, getUserOrderStats, getTodayRosterItems, searchTodayRosterItems,
-  saveNewAddress, addItemsToCart, placeOrder, cancelOrder, removeItemsFromCart, 
-  processBotOrderAndPayment, checkLatestPaymentStatus, verifyDeliveryLocation
+  getCategories, getMenuByCategory, getUserAddresses, getUserOrderStats, getTodayRosterItems, 
+  searchTodayRosterItems, getAvailableCategoriesToday, saveNewAddress, addItemsToCart, 
+  placeOrder, cancelOrder, removeItemsFromCart, processBotOrderAndPayment, 
+  checkLatestPaymentStatus, verifyDeliveryLocation, verifyLocationByCoords
 };
