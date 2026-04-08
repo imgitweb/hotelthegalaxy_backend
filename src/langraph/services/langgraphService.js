@@ -17,6 +17,7 @@ async function runLangGraph({ phone, text, channel = "whatsapp" }) {
     const output = await graph.invoke({
       phone: normalizedPhone,
       inputText: text,
+      location: extractedMsg.location,
     });
 
     console.log(`✅ LangGraph output for ${channel}:`, output);

@@ -33,8 +33,8 @@ function extractIncomingMessage(body) {
     else if (msg.type === "location") {
       console.log("location ..................................................................................................................................")
       extractedLocation = {
-        lat: msg.location.latitude,
-        lng: msg.location.longitude,
+        lat: msg.location.lat,
+        lng: msg.location.lng,
         address: msg.location.address || msg.location.name || "Shared Location"
       };
       // AI graph ko batane ke liye ek hidden keyword set kar diya
