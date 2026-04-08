@@ -9,8 +9,9 @@ function extractIncomingMessage(body) {
     if (!msg) return null;
 
     let extractedText = "";
+    let extractedLocation = null;
 
-    // 🔥 1. Agar normal text message hai
+    // 🔥 1. Agar normal text message hai (Jaise: "i want order 1 veg thali")
     if (msg.type === "text") {
       extractedText = msg.text?.body || "";
     } 
@@ -23,11 +24,20 @@ function extractIncomingMessage(body) {
         // Hum ID extract karenge (jaise 'btn_help' ya 'addr_123')
         extractedText = interactive.button_reply?.id || interactive.button_reply?.title || "";
       } 
-      // Jab List item select hota hai (Menu categories)
+      // Jab List item select hota hai (Menu categories ya Items)
       else if (interactive?.type === "list_reply") {
-        // Hum ID extract karenge (jaise 'cat_123')
         extractedText = interactive.list_reply?.id || interactive.list_reply?.title || "";
       }
+    }
+    // 🔥 3. NAYA: Agar user ne WhatsApp par Location share ki hai
+    else if (msg.type === "location") {
+      extractedLocation = {
+        lat: msg.location.latitude,
+        lng: msg.location.longitude,
+        address: msg.location.address || msg.location.name || "Shared Location"
+      };
+      // AI graph ko batane ke liye ek hidden keyword set kar diya
+      extractedText = "shared_location"; 
     }
 
     return {
@@ -35,6 +45,7 @@ function extractIncomingMessage(body) {
       text: extractedText,
       messageId: msg.id,
       timestamp: msg.timestamp,
+      location: extractedLocation, // 🔥 Location ka data yahan se pass hoga
       raw: msg,
     };
   } catch (err) {
