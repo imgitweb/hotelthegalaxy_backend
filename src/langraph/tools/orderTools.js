@@ -107,6 +107,19 @@ async function registerNewUser(phone, fullName) { return await User.create({ pho
 async function getOrCreateSession(phone) { let session = await Session.findOne({ phone }); if (!session) session = await Session.create({ phone, cart: [] }); return session; }
 async function getActiveOrder(userId) { return await Order.findOne({ user: userId, status: { $nin: ["delivered", "cancelled"] } }).sort({ createdAt: -1 }).lean(); }
 
+// 🔥 NAYA FUNCTION: Aaj ke saare active orders nikalne ke liye
+async function getActiveOrdersToday(userId) {
+  try {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    return await Order.find({ 
+        user: userId, 
+        createdAt: { $gte: today },
+        status: { $nin: ["delivered", "cancelled", "rejected"] } 
+    }).sort({ createdAt: -1 }).lean();
+  } catch (error) { return []; }
+}
+
 async function getCategories() { 
   const cats = await Category.find({ isActive: true }).lean(); 
   const comboCount = await Combo.countDocuments({});
@@ -116,7 +129,6 @@ async function getCategories() {
   return cats;
 }
 
-// 🔥 FIX: Combos ko extract karte waqt unke "items.item" ko populate karna
 async function getTodayRosterItems() { 
   const today = new Date(); today.setHours(0, 0, 0, 0);
   const roster = await DailyRoster.findOne({ date: { $gte: today, $lt: new Date(today.getTime() + 24 * 60 * 60 * 1000) } }).populate("items.id"); 
@@ -136,7 +148,6 @@ async function getTodayRosterItems() {
 
   let items = [];
   
-  // 1. Regular Roster Items
   if (roster && roster.items) {
     const regularItems = roster.items.filter(item => item.id && item.quantity > 0).map(item => {
       let originalPrice = item.id.basePrice;
@@ -171,9 +182,7 @@ async function getTodayRosterItems() {
     items.push(...regularItems);
   }
 
-  // 2. Process Combos (With Populated Items)
   try {
-      // 🔥 YAHAN POPULATE USE KIYA HAI TAQI ITEMS KE NAAM MIL SAKEIN
       const combos = await Combo.find({}).populate("items.item", "name").lean();
       
       const comboItems = combos.map(c => {
@@ -194,7 +203,6 @@ async function getTodayRosterItems() {
          }
          finalPrice = Math.max(0, Math.round(finalPrice));
 
-         // 🔥 Combo ke andar ke items ka naam ek string me jodna
          let includedNames = "";
          if (c.items && c.items.length > 0) {
              includedNames = c.items.map(i => i.item && i.item.name ? i.item.name : "").filter(Boolean).join(" + ");
@@ -202,7 +210,7 @@ async function getTodayRosterItems() {
 
          return {
              _id: c._id,
-             name: `${c.name}`, 
+             name: `📦 ${c.name}`, 
              basePrice: finalPrice,
              originalPrice: originalPrice,
              category: "combos_virtual",
@@ -210,7 +218,7 @@ async function getTodayRosterItems() {
              availableNow: 10,
              isCombo: true,
              offerName: appliedOffer,
-             includedItems: includedNames // 🔥 Yeh UI mein dikhega
+             includedItems: includedNames 
          };
       });
       items.push(...comboItems);
@@ -301,6 +309,12 @@ async function addItemsToCart(phone, items) {
     
     const itemToAdd = rosterItem;
 
+    // 🔥 FIX: Combo ke items ka naam bracket mein set karna (Cart aur DB dono ke liye)
+    let finalName = itemToAdd.name;
+    if (itemToAdd.isCombo && itemToAdd.includedItems) {
+        finalName = `${itemToAdd.name} (${itemToAdd.includedItems})`;
+    }
+
     const existing = session.cart.find((x) => String(x.menuItemId) === String(itemToAdd._id));
     const currentCartQty = existing ? existing.quantity : 0; const newTotalQty = currentCartQty + qtyRequested;
     if (newTotalQty > itemToAdd.maxAllowed) {
@@ -308,12 +322,12 @@ async function addItemsToCart(phone, items) {
        if (allowedToAdd > 0) {
            feedbackMessages.push(`⚠️ *${itemToAdd.name}* ke liye aap max *${itemToAdd.maxAllowed}* order kar sakte hain.`);
            if (existing) { existing.quantity += allowedToAdd; existing.total = existing.quantity * existing.price; } 
-           else { session.cart.push({ menuItemId: itemToAdd._id, isCombo: itemToAdd.isCombo, name: itemToAdd.name, price: itemToAdd.basePrice, quantity: allowedToAdd, total: itemToAdd.basePrice * allowedToAdd }); }
+           else { session.cart.push({ menuItemId: itemToAdd._id, isCombo: itemToAdd.isCombo, name: finalName, price: itemToAdd.basePrice, quantity: allowedToAdd, total: itemToAdd.basePrice * allowedToAdd }); }
        } else { feedbackMessages.push(`⚠️ Aap already *${itemToAdd.name}* ki maximum limit cart mein add chuke hain.`); }
     } else {
        feedbackMessages.push(`✅ *${qtyRequested}x ${itemToAdd.name}* cart mein add ho gaya.`);
        if (existing) { existing.quantity += qtyRequested; existing.total = existing.quantity * existing.price; } 
-       else { session.cart.push({ menuItemId: itemToAdd._id, isCombo: itemToAdd.isCombo, name: itemToAdd.name, price: itemToAdd.basePrice, quantity: qtyRequested, total: itemToAdd.basePrice * qtyRequested }); }
+       else { session.cart.push({ menuItemId: itemToAdd._id, isCombo: itemToAdd.isCombo, name: finalName, price: itemToAdd.basePrice, quantity: qtyRequested, total: itemToAdd.basePrice * qtyRequested }); }
     }
   }
   session.markModified('cart'); 
@@ -437,7 +451,6 @@ async function checkLatestPaymentStatus(userId) {
   } catch (error) { return { found: false }; }
 }
 
-// 🔥 FIX: UI ke liye Combo Items ko populate kar diya gaya hai
 async function getActiveOffers() {
   try {
     const now = new Date();
@@ -457,7 +470,7 @@ async function getActiveOffers() {
 }
 
 module.exports = {
-  checkUserExists, registerNewUser, getOrCreateSession, getActiveOrder, getActiveOffers,
+  checkUserExists, registerNewUser, getOrCreateSession, getActiveOrder, getActiveOrdersToday, getActiveOffers,
   getCategories, getMenuByCategory, getUserAddresses, getUserOrderStats, getTodayRosterItems, 
   searchTodayRosterItems, getAvailableCategoriesToday, saveNewAddress, addItemsToCart, 
   placeOrder, cancelOrder, removeItemsFromCart, processBotOrderAndPayment, 

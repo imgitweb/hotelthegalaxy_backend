@@ -1,12 +1,13 @@
-require("dotenv").config();
+require("dotenv").config(); 
 const { StateGraph } = require("@langchain/langgraph");
 const { ChatOpenAI } = require("@langchain/openai");
 const { z } = require("zod");
 
-const Order = require("../../models/User/ordersModel"); 
+const Order = require("../../models/User/ordersModel");
+
 
 const {
-  checkUserExists, registerNewUser, getOrCreateSession, getActiveOrder,
+  checkUserExists, registerNewUser, getOrCreateSession, getActiveOrder, getActiveOrdersToday,
   getTodayRosterItems, searchTodayRosterItems, getUserAddresses, getUserOrderStats, 
   getCategories, getMenuByCategory, getAvailableCategoriesToday,
   saveNewAddress, addItemsToCart, placeOrder, cancelOrder, removeItemsFromCart, 
@@ -14,10 +15,20 @@ const {
   verifyLocationByCoords, getActiveOffers 
 } = require("../tools/orderTools");
 
+
 const userContextMemory = {}; 
 const paymentAttemptsMemory = {}; 
 const pendingLocationMemory = {}; 
 const pendingQuantityMemory = {}; 
+
+// const llm = new ChatOpenAI({ 
+//   openAIApiKey: process.env.OPENAI_API_KEY, 
+//   modelName: "gpt-4o-mini", 
+//   temperature: 0 
+// });
+
+// 🔥 YAHAN APNE LOGO KA PUBLIC URL DAALEIN 🔥
+const HOTEL_LOGO_URL = process.env.LOGO_IMG_URL || "https://instasize.com/api/image/3aabe1c01be83d90190437a6172108e4457cbbe58d3500147dfeb5d8d567bc90.jpeg"; // Yahan apna URL replace karein
 
 const llm = new ChatOpenAI({ 
   openAIApiKey: process.env.OPENAI_API_KEY, 
@@ -46,7 +57,6 @@ const IntentSchema = z.object({
 
 const aiBrain = llm.withStructuredOutput(IntentSchema, { strict: true });
 
-// 🔥 FIX: Menu mein Combos ke items show karna
 function createInteractiveMenu(items, listTitle, listBody) {
   const rows = items.slice(0, 10).map(item => {
     
@@ -55,7 +65,6 @@ function createInteractiveMenu(items, listTitle, listBody) {
         descText = `₹${item.basePrice} (Offer) | was ₹${item.originalPrice}`;
     }
 
-    // Agar combo hai, toh list mein hi uske andar ka saamaan likha aayega
     if (item.isCombo && item.includedItems) {
         descText += ` | ${item.includedItems}`;
     } else {
@@ -65,7 +74,6 @@ function createInteractiveMenu(items, listTitle, listBody) {
     return {
       id: `add_${item.name}`, 
       title: item.name.substring(0, 24),
-      // WhatsApp description limit is 72 chars
       description: descText.substring(0, 72)
     };
   });
@@ -134,7 +142,7 @@ async function agentDecisionNode(state) {
   if (msg.includes("stats") || msg.includes("history")) return { ...state, aiIntent: "ORDER_STATS", aiData: {} };
 
   const prompt = `
-    You are an intelligent order routing AI for "The Galaxy Hotel".
+    You are an intelligent order routing AI for "Hotel The Galaxy".
     === CONTEXT ===
     BOT_LAST_MESSAGE: """${previousBotMessage}"""
     USER_REPLY: """${state.inputText}"""
@@ -165,10 +173,22 @@ async function actionExecutionNode(state) {
   const { aiIntent, aiData, phone, inputText } = state;
   let user = await checkUserExists(phone);
 
+  // 🔥 NAYA: Unregistered User (Naya User) ke liye Logo ke sath welcome
   if (!user && aiIntent !== "PROVIDE_NAME" && aiIntent !== "GENERAL_INFO") {
-    let replyText = "👑 *Welcome to The Galaxy Hotel!*\n\nKripya apna naam bataein,\ntaaki hum aapko behtar serve kar sakein.";
+    let replyText = "👑 *Welcome to Hotel The Galaxy!*\n\nKripya apna naam type karke bhejein,\ntaaki hum aapko behtar serve kar sakein.";
     userContextMemory[phone] = replyText;
-    return { ...state, replyText, interactive: null };
+    
+    let interactive = { 
+      type: "button", 
+      header: { 
+        type: "image", 
+        image: { link: HOTEL_LOGO_URL } 
+      },
+      body: { text: replyText }, 
+      action: { buttons: [ { type: "reply", reply: { id: "btn_menu", title: "🍔 Skip & See Menu" } } ] } 
+    };
+    
+    return { ...state, replyText, interactive };
   }
 
   const session = await getOrCreateSession(phone); 
@@ -176,30 +196,41 @@ async function actionExecutionNode(state) {
   let interactive = null; 
 
   switch (aiIntent) {
+    // 🔥 NAYA: Naam set hone ke baad Logo ke sath welcome
     case "PROVIDE_NAME": {
       const extractedName = aiData?.user_name || inputText.trim() || "Guest";
       if (!user) user = await registerNewUser(phone, extractedName);
       replyText = `Aapse milkar accha laga, *${user.fullName}*! 👑\n\nAaj aap kya order karna chahenge?`;
-      interactive = { type: "button", body: { text: replyText }, action: { buttons: [ { type: "reply", reply: { id: "btn_menu", title: "🍔 Menu" } }, { type: "reply", reply: { id: "btn_offers", title: "🎁 Offers" } }, { type: "reply", reply: { id: "btn_help", title: "ℹ️ Help" } } ] } };
+      interactive = { 
+        type: "button", 
+        header: { type: "image", image: { link: HOTEL_LOGO_URL } },
+        body: { text: replyText }, 
+        action: { buttons: [ { type: "reply", reply: { id: "btn_menu", title: "🍔 Menu" } }, { type: "reply", reply: { id: "btn_offers", title: "🎁 Offers" } }, { type: "reply", reply: { id: "btn_help", title: "ℹ️ Help" } } ] } 
+      };
       break;
     }
+    // 🔥 NAYA: Purane (Registered) User ko Logo ke sath welcome
     case "GREETING": {
-      const hasActiveOrder = await getActiveOrder(user._id);
-      replyText = `👑 *Welcome back, ${user.fullName}!*\n\nThe Galaxy Hotel mein aapka swagat hai.\nAaj kya order karna chahenge aap?`;
+      const activeOrders = await getActiveOrdersToday(user._id);
+      replyText = `👑 *Welcome back, ${user.fullName}!*\n\nHotel The Galaxy mein aapka swagat hai.\nAaj kya order karna chahenge aap?`;
       let buttons = [{ type: "reply", reply: { id: "btn_menu", title: "🍔 Menu" } }];
-      if (hasActiveOrder) { buttons.push({ type: "reply", reply: { id: "btn_track", title: "📦 Track" } }); }
+      if (activeOrders && activeOrders.length > 0) { buttons.push({ type: "reply", reply: { id: "btn_track", title: "📦 Track" } }); }
       buttons.push({ type: "reply", reply: { id: "btn_offers", title: "🎁 Offers" } });
       if (buttons.length < 3) { buttons.push({ type: "reply", reply: { id: "btn_help", title: "ℹ️ Help" } }); }
-      interactive = { type: "button", body: { text: replyText }, action: { buttons } };
+      
+      interactive = { 
+        type: "button", 
+        header: { type: "image", image: { link: HOTEL_LOGO_URL } },
+        body: { text: replyText }, 
+        action: { buttons } 
+      };
       break;
     }
     case "HELP": {
-      replyText = `🎧 *Galaxy Hotel Support*\n\n📞 Call karein: +916262633305\n📧 Email: gmhotelthegalaxy@gmail.com\n\n*(Upar diye number par tap karke aap direct call kar sakte hain!)*`;
+      replyText = `🎧 *Hotel The Galaxy Support*\n\n📞 Call karein: +916262633305\n📧 Email: gmhotelthegalaxy@gmail.com\n\n*(Upar diye number par tap karke aap direct call kar sakte hain!)*`;
       interactive = { type: "button", body: { text: replyText }, action: { buttons: [ { type: "reply", reply: { id: "btn_menu", title: "🍔 Menu" } }, { type: "reply", reply: { id: "btn_offers", title: "🎁 Offers" } } ] } };
       break;
     }
-    
-    // 🔥 FIX: Beautiful Offers & Combos Display UI with Items
     case "SHOW_OFFERS": {
       const data = await getActiveOffers();
       const offers = data.offers || [];
@@ -224,12 +255,10 @@ async function actionExecutionNode(state) {
             });
         }
         
-        // Combo UI Details Check
         if (combos.length > 0) {
             offerText += "*📦 Special Combos:*\n\n";
             combos.forEach(c => {
                  offerText += `🍔 *${c.name}* - ₹${c.price}\n`;
-                 // 🔥 YAHAN COMBO ITEMS KE NAAM DIKHENGE
                  if (c.items && c.items.length > 0) {
                      const itemNames = c.items.map(i => i.item && i.item.name ? i.item.name : "").filter(Boolean).join(" + ");
                      if (itemNames) offerText += `👉 Includes: ${itemNames}\n`;
@@ -238,12 +267,11 @@ async function actionExecutionNode(state) {
             });
         }
         
-        replyText = `🎁 *Galaxy Hotel Deals:*\n\n${offerText}\n(Combo aur Offer items order karne ke liye Menu par click karein!)`;
+        replyText = `🎁 *Hotel The Galaxy Deals:*\n\n${offerText}\n(Combo aur Offer items order karne ke liye Menu par click karein!)`;
       }
       interactive = { type: "button", body: { text: replyText }, action: { buttons: [{ type: "reply", reply: { id: "btn_menu", title: "🍔 Menu Dekhein" } }] } };
       break;
     }
-
     case "SHOW_ALL_TODAY": {
       const items = await getTodayRosterItems();
       if (!items || items.length === 0) {
@@ -262,7 +290,7 @@ async function actionExecutionNode(state) {
         break; 
       }
       const rows = categories.slice(0, 10).map(cat => ({ id: `cat_${cat._id}`, title: cat.name.substring(0, 24), description: "Tap karke items dekhein" }));
-      interactive = { type: "list", header: { type: "text", text: "🍽️ The Galaxy Menu" }, body: { text: "Neeche diye gaye button par click karke category select karein 👇" }, action: { button: "📋 Menu Dekhein", sections: [{ title: "Categories", rows: rows }] } };
+      interactive = { type: "list", header: { type: "text", text: "🍽️ Hotel The Galaxy Menu" }, body: { text: "Neeche diye gaye button par click karke category select karein 👇" }, action: { button: "📋 Menu Dekhein", sections: [{ title: "Categories", rows: rows }] } };
       break;
     }
     case "SEARCH_ITEM": {
@@ -532,24 +560,45 @@ async function actionExecutionNode(state) {
       break;
     }
     case "TRACK_ORDER": {
-      const orderToTrack = await getActiveOrder(user._id);
-      if (orderToTrack) {
-        const orderStatus = orderToTrack.status ? orderToTrack.status.toLowerCase() : "processing";
-        const amount = orderToTrack.totalAmount || orderToTrack.pricing?.total || 0;
-        replyText = `📦 *Aapka Active Order*\n\n🔖 Order ID: ${orderToTrack.orderNumber || orderToTrack._id}\n📊 Status: *${orderStatus.toUpperCase()}*\n💰 Amount: ₹${amount.toFixed(2)}\n\n`;
-        if (["dispatched", "out_for_delivery"].includes(orderStatus) && orderToTrack.deliveryBoy) { 
-          replyText += `🛵 *Delivery Boy raste mein hai!*\nNaam: ${orderToTrack.deliveryBoy.name || "Executive"}\n📞 Contact: ${orderToTrack.deliveryBoy.phone}\n\n`; 
-        } else { 
-          replyText += `👨‍🍳 Humare chefs aapka order prepare kar rahe hain.\n\n`; 
-        }
-        const uncancelableStatuses = ["confirmed", "preparing", "dispatched", "out_for_delivery", "delivered"];
+      const activeOrders = await getActiveOrdersToday(user._id);
+      
+      if (activeOrders && activeOrders.length > 0) {
+        replyText = `📦 *Aapke Aaj Ke Active Orders:*\n\n`;
+        let hasCancelable = false;
+        
+        activeOrders.forEach((order, index) => {
+            const orderStatus = order.status ? order.status.toLowerCase() : "processing";
+            const amount = order.totalAmount || order.pricing?.total || 0;
+            
+            replyText += `*${index + 1}. Order ID:* ${order.orderNumber || order._id}\n`;
+            replyText += `📊 Status: *${orderStatus.toUpperCase()}*\n`;
+            replyText += `💰 Amount: ₹${amount.toFixed(2)}\n`;
+            
+            if (order.items && order.items.length > 0) {
+               const itemStr = order.items.map(i => `${i.quantity}x ${i.name}`).join(", ");
+               replyText += `📝 Items: ${itemStr}\n`;
+            }
+
+            if (["dispatched", "out_for_delivery"].includes(orderStatus) && order.deliveryBoy) { 
+              replyText += `🛵 Rider: ${order.deliveryBoy.name || "Executive"} (📞 ${order.deliveryBoy.phone})\n`; 
+            } else { 
+              replyText += `👨‍🍳 Humare chefs preparation kar rahe hain.\n`; 
+            }
+            replyText += `\n---\n\n`;
+            
+            const uncancelableStatuses = ["confirmed", "preparing", "dispatched", "out_for_delivery", "delivered"];
+            if (!uncancelableStatuses.includes(orderStatus)) { 
+                hasCancelable = true;
+            }
+        });
+
         let buttons = [{ type: "reply", reply: { id: "btn_add_more", title: "🍔 Aur Order Karein" } }];
-        if (!uncancelableStatuses.includes(orderStatus)) { 
+        if (hasCancelable) { 
           buttons.push({ type: "reply", reply: { id: "btn_cancel_order", title: "❌ Cancel Order" } }); 
         }
-        interactive = { type: "button", body: { text: replyText }, action: { buttons } };
+        interactive = { type: "button", body: { text: replyText.trim() }, action: { buttons } };
       } else {
-        replyText = "Aapka koi active order nahi hai abhi.";
+        replyText = "Aapka aaj ka koi active order nahi hai.";
         interactive = { type: "button", body: { text: replyText }, action: { buttons: [{ type: "reply", reply: { id: "btn_menu", title: "🍔 Menu Dekhein" } }] } };
       }
       break;
