@@ -31,6 +31,7 @@ function extractIncomingMessage(body) {
     }
     // 🔥 3. NAYA: Agar user ne WhatsApp par Location share ki hai
     else if (msg.type === "location") {
+      console.log("location ..................................................................................................................................")
       extractedLocation = {
         lat: msg.location.latitude,
         lng: msg.location.longitude,
