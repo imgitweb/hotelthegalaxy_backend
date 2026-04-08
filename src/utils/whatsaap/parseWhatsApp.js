@@ -11,7 +11,7 @@ function extractIncomingMessage(body) {
     let extractedText = "";
     let extractedLocation = null;
 
-    // 🔥 1. Agar normal text message hai (Jaise: "i want order 1 veg thali")
+    // 🔥 1. Agar normal text message hai
     if (msg.type === "text") {
       extractedText = msg.text?.body || "";
     } 
@@ -19,22 +19,20 @@ function extractIncomingMessage(body) {
     else if (msg.type === "interactive") {
       const interactive = msg.interactive;
       
-      // Jab Button click hota hai
       if (interactive?.type === "button_reply") {
-        // Hum ID extract karenge (jaise 'btn_help' ya 'addr_123')
         extractedText = interactive.button_reply?.id || interactive.button_reply?.title || "";
       } 
-      // Jab List item select hota hai (Menu categories ya Items)
       else if (interactive?.type === "list_reply") {
         extractedText = interactive.list_reply?.id || interactive.list_reply?.title || "";
       }
     }
     // 🔥 3. NAYA: Agar user ne WhatsApp par Location share ki hai
     else if (msg.type === "location") {
-      console.log("location ..................................................................................................................................")
+      console.log("📍 Location Received!"); 
       extractedLocation = {
-        lat: msg.location.lat,
-        lng: msg.location.lng,
+        // ✅ YAHAN CHANGE KIYA HAI: lat/lng ki jagah latitude/longitude
+        lat: msg.location.latitude,   
+        lng: msg.location.longitude,  
         address: msg.location.address || msg.location.name || "Shared Location"
       };
       // AI graph ko batane ke liye ek hidden keyword set kar diya

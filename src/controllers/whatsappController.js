@@ -44,6 +44,7 @@ const receiveMessage = async (req, res) => {
     await runLangGraph({
       phone: incoming.from,
       text: incoming.text,
+      location: incoming.location,
     });
   } catch (err) {
     console.error("❌ receiveMessage error:", err.response?.data || err.message);
