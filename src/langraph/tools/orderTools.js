@@ -41,8 +41,9 @@ async function verifyDeliveryLocation(area, landmark) {
     const { lat, lng } = result.geometry.location;
     const formattedAddress = result.formatted_address;
 
-    if (!formattedAddress.toLowerCase().includes("chhindwara")) {
-      return { status: false, message: `Maaf kijiyega, aapka address '*${formattedAddress}*' Chhindwara se bahar lag raha hai. Humari delivery sirf Chhindwara city ke andar available hai.` };
+    // 🔥 FIX: Chhindwara ki jagah poora Madhya Pradesh allow kar diya hai
+    if (!formattedAddress.toLowerCase().includes("madhya pradesh")) {
+      return { status: false, message: `Maaf kijiyega, aapka address '*${formattedAddress}*' Madhya Pradesh se bahar lag raha hai. Humari delivery sirf Madhya Pradesh ke andar available hai.` };
     }
 
     const distRes = await axios.get("https://maps.googleapis.com/maps/api/distancematrix/json", { params: { origins: `${HOTEL_LAT},${HOTEL_LNG}`, destinations: `${lat},${lng}`, key: GOOGLE_API_KEY } });
@@ -91,8 +92,9 @@ async function verifyLocationByCoords(lat, lng) {
       formattedAddress = geoRes.data.results[0].formatted_address;
     }
 
-    if (!formattedAddress.toLowerCase().includes("chhindwara")) {
-      return { status: false, message: `Humari delivery sirf Chhindwara city ke andar available hai.` };
+    // 🔥 FIX: Yahan bhi Madhya Pradesh update kar diya gaya hai
+    if (!formattedAddress.toLowerCase().includes("madhya pradesh")) {
+      return { status: false, message: `Humari delivery sirf Madhya Pradesh ke andar available hai.` };
     }
 
     return { status: true, lat, lng, formattedAddress, distanceKm };
@@ -238,7 +240,8 @@ async function placeOrder(phone, paymentMethod) {
   const newOrder = await Order.create({
     orderNumber, user: user._id, items: session.cart, 
     pricing: { subtotal, deliveryCharge, tax: 0, total }, 
-    address: { fullName: user.fullName || "WhatsApp User", phone: phone, street: selectedAddress ? selectedAddress.street : "Store Pickup", landmark: selectedAddress ? selectedAddress.landmark : "", city: "Chhindwara" },
+    // 🔥 FIX: Default DB City update kar di hai
+    address: { fullName: user.fullName || "WhatsApp User", phone: phone, street: selectedAddress ? selectedAddress.street : "Store Pickup", landmark: selectedAddress ? selectedAddress.landmark : "", city: "Madhya Pradesh" },
     payment: { method: paymentMethod, status: paymentMethod === "ONLINE" ? "paid" : "pending" }, status: "pending",
   });
   session.step = "HOME"; session.cart = []; session.addressId = null; await session.save();
