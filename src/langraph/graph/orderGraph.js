@@ -17,6 +17,7 @@ const {
 const userContextMemory = {}; 
 const paymentAttemptsMemory = {}; 
 const pendingLocationMemory = {}; 
+const pendingQuantityMemory = {}; // Item quantity ka wait karne ke liye memory
 
 const llm = new ChatOpenAI({ 
   openAIApiKey: process.env.OPENAI_API_KEY, 
@@ -29,7 +30,7 @@ const IntentSchema = z.object({
     "GREETING", "SHOW_MENU", "SELECT_CATEGORY", "SEARCH_ITEM", "ADD_TO_CART", "REMOVE_FROM_CART", 
     "CHECKOUT", "PROVIDE_ADDRESS", "PROVIDE_SHARED_LOCATION", "PROVIDE_HOUSE_NUMBER", "SELECT_SAVED_ADDRESS", "PROMPT_NEW_ADDRESS", "PROVIDE_NAME", 
     "COMPLETE_ORDER", "TRACK_ORDER", "ORDER_STATS", 
-    "CANCEL_ORDER", "HELP", "GENERAL_INFO", "SHOW_OFFERS", "SHOW_ALL_TODAY", "UNKNOWN" 
+    "CANCEL_ORDER", "HELP", "GENERAL_INFO", "SHOW_OFFERS", "SHOW_ALL_TODAY", "PROMPT_QUANTITY", "HANDLE_QUANTITY_SELECTION", "UNKNOWN" 
   ]).describe("Identify the core intent based on user input and the previous bot message context."),
   
   user_name: z.string().nullable(),
@@ -38,7 +39,9 @@ const IntentSchema = z.object({
   house_number: z.string().nullable(),
   address_index: z.number().nullable(),
   category_name: z.string().nullable(),
-  search_query: z.string().nullable()
+  search_query: z.string().nullable(),
+  item_name: z.string().nullable(),
+  quantity: z.number().nullable()
 });
 
 const aiBrain = llm.withStructuredOutput(IntentSchema, { strict: true });
@@ -89,9 +92,16 @@ async function agentDecisionNode(state) {
     return { ...state, aiIntent: "PROVIDE_NAME", aiData: { user_name: rawMsg } };
   }
 
-  if (rawMsg.startsWith("add_")) {
-    const itemName = rawMsg.substring(4); 
-    return { ...state, aiIntent: "ADD_TO_CART", aiData: { extracted_items: [{ name: itemName, quantity: 1 }] } };
+  // 🔥 FIX: Direct Item List se tap karne par (Case Insensitive)
+  if (msg.startsWith("add_")) {
+    const itemName = rawMsg.trim().substring(4); // Preserve Original Case
+    return { ...state, aiIntent: "PROMPT_QUANTITY", aiData: { item_name: itemName } };
+  }
+
+  // 🔥 FIX: Quantity List se tap karne par (1 se 10)
+  if (msg.startsWith("qty_")) {
+    const qty = parseInt(msg.substring(4)); 
+    return { ...state, aiIntent: "HANDLE_QUANTITY_SELECTION", aiData: { quantity: qty } };
   }
 
   if (msg.startsWith("cat_")) return { ...state, aiIntent: "SELECT_CATEGORY", aiData: { categoryId: msg.replace("cat_", "") } };
@@ -119,16 +129,27 @@ async function agentDecisionNode(state) {
     USER_REPLY: """${state.inputText}"""
     
     === STRICT DECISION RULES ===
-    1. CATEGORY BROWSE: If USER_REPLY is a food category WITHOUT a quantity -> intent MUST be "SELECT_CATEGORY".
-    2. SEARCH ITEM: If user mentions a broad term like "paneer", "chicken" WITHOUT a quantity -> intent "SEARCH_ITEM" and extract 'search_query'.
-    3. ADDRESS SELECTION: If BOT_LAST_MESSAGE asks for address, ANY address detail typed means "PROVIDE_ADDRESS". NEVER return GREETING.
-    4. ADD TO CART: ONLY trigger "ADD_TO_CART" if the user explicitly types a FOOD ITEM WITH A QUANTITY or explicitly says "order X". 
-    5. REMOVE FROM CART: If user asks to remove/delete an item -> intent "REMOVE_FROM_CART" and extract items.
-    6. COMPLETE ORDER: If BOT_LAST_MESSAGE contains "Razorpay" AND USER_REPLY means "done" or "paid" -> intent "COMPLETE_ORDER".
+    1. PROMPT QUANTITY: If the user replies with JUST a FOOD ITEM NAME (e.g., "Veg Thali", "Paneer") with NO clear NUMBER/QUANTITY, your intent MUST be "PROMPT_QUANTITY" and extract 'item_name'. DO NOT use ADD_TO_CART.
+    2. CATEGORY BROWSE: If USER_REPLY is a food category (like 'Starter', 'Main Course') WITHOUT a quantity -> intent MUST be "SELECT_CATEGORY".
+    3. SEARCH ITEM: If user mentions a broad term like "paneer", "chicken" WITHOUT a quantity -> intent "SEARCH_ITEM" and extract 'search_query'.
+    4. ADDRESS SELECTION: If BOT_LAST_MESSAGE asks for address, ANY address detail typed means "PROVIDE_ADDRESS". NEVER return GREETING.
+    5. ADD TO CART: ONLY trigger "ADD_TO_CART" if the user explicitly types a FOOD ITEM WITH A NUMBER/QUANTITY (e.g., "add 2 Veg Thali", "1 Kadhai Paneer"). 
+    6. REMOVE FROM CART: If user asks to remove/delete an item -> intent "REMOVE_FROM_CART" and extract items.
+    7. COMPLETE ORDER: If BOT_LAST_MESSAGE contains "Razorpay" AND USER_REPLY means "done" or "paid" -> intent "COMPLETE_ORDER".
   `;
 
   try {
     const aiDecision = await aiBrain.invoke(prompt);
+    
+    // 🔥 ULTIMATE FALLBACK: Agar AI galti se ADD_TO_CART bhej de bina number check kiye
+    if (aiDecision.intent === "ADD_TO_CART" && aiDecision.extracted_items && aiDecision.extracted_items.length > 0) {
+      // Text mein check karo ki koi digit (1, 2, 3...) hai ya nahi
+      const hasNumber = /\d/.test(msg);
+      if (!hasNumber) {
+        return { ...state, aiIntent: "PROMPT_QUANTITY", aiData: { item_name: aiDecision.extracted_items[0].name } };
+      }
+    }
+
     return { ...state, aiIntent: aiDecision.intent, aiData: aiDecision };
   } catch (error) { return { ...state, aiIntent: "UNKNOWN", aiData: {} }; }
 }
@@ -188,7 +209,7 @@ async function actionExecutionNode(state) {
         interactive = { type: "button", body: { text: replyText }, action: { buttons: [{ type: "reply", reply: { id: "btn_menu", title: "🍔 Categories" } }] } };
       } else {
         replyText = ""; 
-        interactive = createInteractiveMenu(items, "📜 Aaj ke Items", "Neeche tap karke item ko seedha cart mein add karein 👇");
+        interactive = createInteractiveMenu(items, "📜 Aaj ke Items", "Neeche tap karke item select karein 👇");
       }
       break;
     }
@@ -219,7 +240,6 @@ async function actionExecutionNode(state) {
       let categoryItems = []; 
       let categoryName = aiData?.category_name || inputText;
 
-      // 🔥 FIX: Agar inputText "cat_" se shuru ho raha hai toh asli Category Name dhundho
       if (categoryId && categoryName.startsWith("cat_")) {
         const categories = await getCategories();
         const matchedCat = categories.find(c => String(c._id) === String(categoryId));
@@ -240,10 +260,72 @@ async function actionExecutionNode(state) {
         interactive = { type: "button", body: { text: replyText }, action: { buttons: [{ type: "reply", reply: { id: "btn_menu", title: "🍔 Pura Menu Dekhein" } }] } };
       } else {
         replyText = ""; 
-        interactive = createInteractiveMenu(categoryItems, `📜 ${categoryName || 'Menu'} Items`, "Neeche tap karke item ko seedha cart mein add karein 👇");
+        interactive = createInteractiveMenu(categoryItems, `📜 ${categoryName || 'Menu'} Items`, "Neeche tap karke item select karein 👇");
       }
       break;
     }
+
+    // 🔥 YAHAN QUANTITY PUCHEGA (1 TO 10)
+    case "PROMPT_QUANTITY": {
+      const itemName = aiData?.item_name || inputText.trim();
+      if (!itemName) {
+        replyText = "Error: Item nahi mila. Kripya menu se wapas select karein.";
+        interactive = { type: "button", body: { text: replyText }, action: { buttons: [{ type: "reply", reply: { id: "btn_menu", title: "🍔 Menu" } }] } };
+        break;
+      }
+      
+      // Memory mein save kar lo ki kaunsa item select hua hai
+      pendingQuantityMemory[phone] = itemName;
+      
+      // WhatsApp list mein Max 10 items hote hain
+      const qtyRows = Array.from({length: 10}, (_, i) => ({
+        id: `qty_${i+1}`,
+        title: `${i+1} Quantity`,
+        description: `Add ${i+1} ${itemName.substring(0, 15)}...`
+      }));
+
+      replyText = `Aapne *${itemName}* select kiya hai.\n\nKripya neeche list par tap karke batayein ki aapko iski kitni quantity chahiye (1 se 10) 👇`;
+      
+      interactive = {
+        type: "list",
+        header: { type: "text", text: "🔢 Quantity Select Karein" },
+        body: { text: replyText },
+        action: {
+          button: "🔢 Kitna Chahiye?",
+          sections: [{ title: "Select Quantity", rows: qtyRows }]
+        }
+      };
+      break;
+    }
+
+    // 🔥 QUANTITY SELECT HONE PAR CART ME ADD KAREGA
+    case "HANDLE_QUANTITY_SELECTION": {
+      const qty = aiData?.quantity || 1;
+      const itemName = pendingQuantityMemory[phone];
+      
+      if (!itemName) {
+        replyText = "Session expire ho gaya hai. Kripya menu se item wapas select karein.";
+        interactive = { type: "button", body: { text: replyText }, action: { buttons: [{ type: "reply", reply: { id: "btn_menu", title: "🍔 Menu Dekhein" } }] } };
+        break;
+      }
+
+      const itemsToAdd = [{ name: itemName, quantity: qty }];
+      const { cart, messages, setting } = await addItemsToCart(phone, itemsToAdd);
+      
+      // Add ho gaya toh memory clear kardo
+      delete pendingQuantityMemory[phone];
+
+      let cartSummary = cart.map(item => `▪️ ${item.quantity}x ${item.name} - ₹${item.total}`).join("\n");
+      let subtotal = cart.reduce((sum, item) => sum + item.total, 0);
+      let feedbackString = messages.join("\n"); 
+      let deliveryMsg = subtotal >= (setting?.freeDeliveryAbove || 500) ? "FREE! 🎉" : `₹${setting?.baseFee || 30}`;
+      
+      replyText = `${feedbackString}\n\n🛒 *Aapka Cart:*\n${cartSummary}\n\n🧾 Subtotal: ₹${subtotal}\n🚚 Est. Delivery: ${deliveryMsg}\n*(₹${setting?.freeDeliveryAbove || 500} se upar free delivery!)*\n\nAur kuch chahiye ya checkout karein?`;
+      interactive = { type: "button", body: { text: replyText }, action: { buttons: [ { type: "reply", reply: { id: "btn_add_more", title: "➕ Aur Add" } }, { type: "reply", reply: { id: "btn_checkout", title: "➡️ Checkout" } } ] } };
+      break;
+    }
+
+    // Agar user direct text type karta hai "order 2 thali"
     case "ADD_TO_CART": {
       const itemsToAdd = aiData?.extracted_items || [];
       if (itemsToAdd.length === 0) {
@@ -256,10 +338,11 @@ async function actionExecutionNode(state) {
         let deliveryMsg = subtotal >= (setting?.freeDeliveryAbove || 500) ? "FREE! 🎉" : `₹${setting?.baseFee || 30}`;
         
         replyText = `${feedbackString}\n\n🛒 *Aapka Cart:*\n${cartSummary}\n\n🧾 Subtotal: ₹${subtotal}\n🚚 Est. Delivery: ${deliveryMsg}\n*(₹${setting?.freeDeliveryAbove || 500} se upar free delivery!)*\n\nAur kuch chahiye ya checkout karein?`;
-        interactive = { type: "button", body: { text: replyText }, action: { buttons: [ { type: "reply", reply: { id: "btn_add_more", title: "➕ Aur Add Karein" } }, { type: "reply", reply: { id: "btn_checkout", title: "➡️ Checkout" } } ] } };
+        interactive = { type: "button", body: { text: replyText }, action: { buttons: [ { type: "reply", reply: { id: "btn_add_more", title: "➕ Aur Add" } }, { type: "reply", reply: { id: "btn_checkout", title: "➡️ Checkout" } } ] } };
       }
       break;
     }
+
     case "REMOVE_FROM_CART": {
       const itemsToRemove = aiData?.extracted_items || [];
       if (itemsToRemove.length === 0) {
@@ -290,7 +373,7 @@ async function actionExecutionNode(state) {
           let uniqueTitle = `${idx + 1}. ${addr.label || 'Home'}`.substring(0, 20); 
           return { type: "reply", reply: { id: `addr_${addr._id}`, title: uniqueTitle } };
         });
-        buttons.push({ type: "reply", reply: { id: "btn_new_address", title: "➕ Naya Address Type Karein" } });
+        buttons.push({ type: "reply", reply: { id: "btn_new_address", title: "➕ Naya Address" } });
 
         let addressDetails = topAddresses.map((addr, idx) => `*${idx + 1}. ${addr.label || "Home"}*:\n${addr.street}, ${addr.landmark}`).join("\n\n");
         addressDetails += `\n\n*${topAddresses.length + 1}.* ➕ Ek Naya Address Jodein`;
@@ -316,9 +399,10 @@ async function actionExecutionNode(state) {
       break; 
     }
     case "PROVIDE_SHARED_LOCATION": {
-      const loc = aiData?.location;
+      const loc = aiData?.location || state.location;
       if (!loc || !loc.lat || !loc.lng) {
         replyText = "Maaf kijiyega, hume aapki location theek se nahi mili. Kripya wapas share karein.";
+        interactive = { type: "location_request_message", body: { text: replyText }, action: { name: "send_location" } };
         break;
       }
       const locationCheck = await verifyLocationByCoords(loc.lat, loc.lng);
