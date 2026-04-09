@@ -37,6 +37,7 @@ const riderRoutes = require("./routes/admin/rider.routes");
 const riderAuthRoutes = require("./routes/riderRoutes");
 const staffRoutes = require("./routes/admin/staffRoutes");
 const roomRoutes = require("./routes/roomRoutes");
+const staffAttendance = require("./routes/staffAuthRoutes")
 const adminSettingRoutes = require("./routes/adminSettingRoutes")
 const path = require("path");
 const router = require("express").Router();
@@ -136,6 +137,7 @@ app.use("/api/v1/admin/riders", riderRoutes);
 app.use("/api/v1/admin/staff", staffRoutes);
 app.use("/api/v1/payment" ,paymentRoutes);
 app.use("/api/v1/rooms", roomRoutes);
+app.use("/api/v1/staffAttendance",staffAttendance);
 
 app.use(
   "/api/v1/admin/availability",
