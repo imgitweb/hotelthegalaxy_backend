@@ -6,34 +6,18 @@ const attendanceSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "Staff",
       required: true,
-      index: true,
     },
 
     date: {
-      type: Date,
+      type: String, // 🔥 use string (YYYY-MM-DD)
       required: true,
-      index: true,
     },
 
-    checkInTime: {
-      type: Date,
-    },
+    checkInTime: Date,
 
-    checkOutTime: {
-      type: Date,
-    },
+    checkInPhoto: String,
 
-    checkInPhoto: {
-      type: String,
-    },
-
-    checkOutPhoto: {
-      type: String,
-    },
-
-    deviceId: {
-      type: String,
-    },
+    deviceId: String,
 
     location: {
       lat: Number,
@@ -42,19 +26,12 @@ const attendanceSchema = new mongoose.Schema(
 
     status: {
       type: String,
-      enum: ["Present", "Absent", "Late"],
       default: "Present",
-    },
-
-    isVerified: {
-      type: Boolean,
-      default: false,
     },
   },
   { timestamps: true }
 );
 
-// prevent duplicate attendance per day
 attendanceSchema.index({ staff: 1, date: 1 }, { unique: true });
 
 module.exports = mongoose.model("Attendance", attendanceSchema);

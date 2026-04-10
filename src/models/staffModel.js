@@ -67,6 +67,7 @@ const staffSchema = new mongoose.Schema(
       type: Boolean,
       default: false,
     },
+    
 
     // 🔹 OTP
     otp: {
