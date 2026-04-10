@@ -1,4 +1,4 @@
-const Attendance = require("../models/Attendance"); 
+const {attendance} = require("../models/attendance"); 
 
 
 exports.markAttendance = async (req, res) => {
@@ -27,7 +27,7 @@ exports.markAttendance = async (req, res) => {
     // 5. Database में Attendance Save करें
     const photoUrl = `/uploads/${req.file.filename}`; // सेव की गई इमेज का पाथ
 
-    const newAttendance = new Attendance({
+    const newAttendance = new attendance({
       staffId: staffId,
       date: new Date(),
       checkInTime: new Date(),
