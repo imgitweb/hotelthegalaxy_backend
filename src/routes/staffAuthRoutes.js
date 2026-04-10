@@ -10,12 +10,7 @@ const upload = require("../middleware/upload");
 router.post("/send-otp", controller.sendOtp);
 router.post("/verify-otp", controller.verifyOtp);
 
-router.post(
-  "/complete-profile",
-  staffAuth,
-  upload.single("photo"),
-  controller.completeProfile
-);
+
 
 router.post(
   "/mark-attendance",

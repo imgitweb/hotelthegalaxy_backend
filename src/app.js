@@ -39,6 +39,7 @@ const staffRoutes = require("./routes/admin/staffRoutes");
 const roomRoutes = require("./routes/roomRoutes");
 const staffAttendance = require("./routes/staffAuthRoutes")
 const adminSettingRoutes = require("./routes/adminSettingRoutes")
+
 const path = require("path");
 const router = require("express").Router();
 const app = express();
@@ -53,6 +54,7 @@ const allowedOrigins = [
   "https://www.uat.hotelthegalaxy.in",
   "https://admin.hotelthegalaxy.in",
   "https://www.admin.hotelthegalaxy.in",
+  "http://192.168.0.126:3000",
 ].filter(Boolean);
 const corsOptions = {
   origin: function (origin, callback) {
