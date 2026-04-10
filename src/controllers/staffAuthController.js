@@ -1,6 +1,6 @@
 const Staff = require("../models/staffModel");
 const jwt = require("jsonwebtoken");
-const {Attendance} = require("../models/attendance"); 
+const {attendance} = require("../models/attendance"); 
 const { generateOTP, hashOTP } = require("../utils/otp");
 const { normalizePhone } = require("../utils/normalizePhone");
 const { sendAuthTemplate } = require("../utils/whatsaap/sendAuthTemplate");
@@ -125,7 +125,7 @@ exports.verifyOtp = async (req, res) => {
     // 5. Database में Attendance Save करें
     const photoUrl = `/uploads/${req.file.filename}`; // सेव की गई इमेज का पाथ
 
-    const newAttendance = new Attendance({
+    const newAttendance = new attendance({
       staffId: staffId,
       date: new Date(),
       checkInTime: new Date(),
