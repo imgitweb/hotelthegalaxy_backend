@@ -1,91 +1,59 @@
-const Attendance = require("../models/attendance");
-const Staff = require("../models/staffModel");
-const getDistance = require("../utils/distance");
+const Attendance = require("../models/Attendance"); 
+
 
 exports.markAttendance = async (req, res) => {
   try {
-    const staffId = req.user.id;
-    const { qrData, deviceId, lat, lng } = req.body;
+    // 1. Frontend से भेजा गया डेटा निकालें
+    const { qrData, lat, lng, deviceId } = req.body;
+    const staffId = req.staff.id; // verifyStaffToken मिडलवेयर से मिलेगा
 
+    // 2. Photo चेक करें
     if (!req.file) {
-      return res.status(400).json({ message: "Photo required" });
+      return res.status(400).json({ message: "Photo is required" });
     }
 
-    // ✅ STATIC QR CHECK
-    if (qrData !== process.env.ATTENDANCE_QR) {
-      return res.status(400).json({ message: "Invalid QR" });
-    }
-
-    const staff = await Staff.findById(staffId);
-
-    if (!staff || !staff.isActive) {
-      return res.status(403).json({ message: "Unauthorized" });
-    }
-
-    // ✅ PROFILE CHECK
-    if (!staff.photo || !staff.isFirstLogin) {
-      return res.status(403).json({
-        message: "Complete profile first",
+    // 3. QR Code Validate करें (.env वाले QR_ID से मैच करें)
+    const expectedQrId = process.env.QR_ID;
+    
+    if (qrData !== expectedQrId) {
+      return res.status(400).json({ 
+        message: "Invalid QR Code. Please scan the correct Hotel QR." 
       });
     }
 
-    // ✅ DEVICE LOCK
-    if (staff.deviceId && staff.deviceId !== deviceId) {
-      return res.status(403).json({
-        message: "Unauthorized device",
-      });
-    }
+    // 4. (Optional) आप Backend में भी Distance चेक कर सकते हैं सिक्योरिटी के लिए 
+    // ताकि कोई Fake GPS इस्तेमाल न कर सके। (अभी हम Frontend के डेटा पर भरोसा कर रहे हैं)
 
-    // ✅ LOCATION CHECK
-    const distance = getDistance(
-      lat,
-      lng,
-      process.env.OFFICE_LAT,
-      process.env.OFFICE_LNG
-    );
+    // 5. Database में Attendance Save करें
+    const photoUrl = `/uploads/${req.file.filename}`; // सेव की गई इमेज का पाथ
 
-    if (distance > process.env.OFFICE_RADIUS) {
-      return res.status(403).json({
-        message: "You are outside office",
-      });
-    }
-
-    // ✅ ONE ATTENDANCE PER DAY
-    const today = new Date().toISOString().split("T")[0];
-
-    const existing = await Attendance.findOne({
-      staff: staffId,
-      date: today,
-    });
-
-    if (existing) {
-      return res.status(409).json({
-        message: "Attendance already marked today",
-      });
-    }
-
-    const attendance = await Attendance.create({
-      staff: staffId,
-      date: today,
+    const newAttendance = new Attendance({
+      staffId: staffId,
+      date: new Date(),
       checkInTime: new Date(),
-      checkInPhoto: req.file.filename,
-      deviceId,
-      location: { lat, lng },
-      status: "Present",
-      isVerified: true,
+      location: {
+        lat: parseFloat(lat),
+        lng: parseFloat(lng)
+      },
+      photo: photoUrl,
+      deviceId: deviceId || "unknown",
+      status: "Present"
     });
 
-    await Staff.findByIdAndUpdate(staffId, {
-      lastAttendanceAt: new Date(),
-    });
+    await newAttendance.save();
 
-    return res.json({
+    // 6. Success Response
+    return res.status(200).json({
       success: true,
-      message: "Attendance marked successfully",
-      data: attendance,
+      message: "Attendance marked successfully ✅",
+      data: newAttendance
     });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ message: "Server error" });
+
+  } catch (error) {
+    console.error("Mark Attendance Error:", error);
+    return res.status(500).json({ 
+      success: false, 
+      message: "Internal Server Error while marking attendance." 
+    });
   }
 };

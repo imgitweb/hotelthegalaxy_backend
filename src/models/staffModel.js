@@ -98,6 +98,11 @@ const staffSchema = new mongoose.Schema(
       select: false,
     },
 
+    faceEmbedding: {
+      type: [Number], // Array of numbers representing the face
+      select: false,  // Don't fetch by default for security
+    },
+
     otpRequestWindowStartedAt: {
       type: Date,
       select: false,

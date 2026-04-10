@@ -1,6 +1,6 @@
 const Staff = require("../models/staffModel");
 const jwt = require("jsonwebtoken");
-
+const Attendance = require("../models/Attendance"); 
 const { generateOTP, hashOTP } = require("../utils/otp");
 const { normalizePhone } = require("../utils/normalizePhone");
 const { sendAuthTemplate } = require("../utils/whatsaap/sendAuthTemplate");
@@ -14,6 +14,8 @@ const OTP_EXPIRY =
 exports.sendOtp = async (req, res) => {
   try {
     const { phone } = req.body;
+
+    console.log("............","")
 
     const normalizedPhone = normalizePhone(phone);
 
@@ -97,29 +99,59 @@ exports.verifyOtp = async (req, res) => {
 // ======================
 // 👤 COMPLETE PROFILE
 // ======================
-exports.completeProfile = async (req, res) => {
+ exports.markAttendance = async (req, res) => {
   try {
-    const staffId = req.user.id;
+    // 1. Frontend से भेजा गया डेटा निकालें
+    const { qrData, lat, lng, deviceId } = req.body;
+    const staffId = req.staff.id; // verifyStaffToken मिडलवेयर से मिलेगा
 
+    // 2. Photo चेक करें
     if (!req.file) {
-      return res.status(400).json({ message: "Photo required" });
+      return res.status(400).json({ message: "Photo is required" });
     }
 
-    const staff = await Staff.findByIdAndUpdate(
-      staffId,
-      {
-        photo: req.file.filename,
-        isFirstLogin: true,
-      },
-      { new: true }
-    );
+    // 3. QR Code Validate करें (.env वाले QR_ID से मैच करें)
+    const expectedQrId = process.env.QR_ID;
+    
+    if (qrData !== expectedQrId) {
+      return res.status(400).json({ 
+        message: "Invalid QR Code. Please scan the correct Hotel QR." 
+      });
+    }
 
-    return res.json({
-      success: true,
-      message: "Profile completed",
-      staff,
+    // 4. (Optional) आप Backend में भी Distance चेक कर सकते हैं सिक्योरिटी के लिए 
+    // ताकि कोई Fake GPS इस्तेमाल न कर सके। (अभी हम Frontend के डेटा पर भरोसा कर रहे हैं)
+
+    // 5. Database में Attendance Save करें
+    const photoUrl = `/uploads/${req.file.filename}`; // सेव की गई इमेज का पाथ
+
+    const newAttendance = new Attendance({
+      staffId: staffId,
+      date: new Date(),
+      checkInTime: new Date(),
+      location: {
+        lat: parseFloat(lat),
+        lng: parseFloat(lng)
+      },
+      photo: photoUrl,
+      deviceId: deviceId || "unknown",
+      status: "Present"
     });
-  } catch (err) {
-    res.status(500).json({ message: "Upload failed" });
+
+    await newAttendance.save();
+
+    // 6. Success Response
+    return res.status(200).json({
+      success: true,
+      message: "Attendance marked successfully ✅",
+      data: newAttendance
+    });
+
+  } catch (error) {
+    console.error("Mark Attendance Error:", error);
+    return res.status(500).json({ 
+      success: false, 
+      message: "Internal Server Error while marking attendance." 
+    });
   }
 };
