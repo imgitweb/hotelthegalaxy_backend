@@ -1,6 +1,6 @@
 const Staff = require("../models/staffModel");
 const jwt = require("jsonwebtoken");
-const Attendance = require("../models/Attendance"); 
+const {Attendance} = require("../models/attendance"); 
 const { generateOTP, hashOTP } = require("../utils/otp");
 const { normalizePhone } = require("../utils/normalizePhone");
 const { sendAuthTemplate } = require("../utils/whatsaap/sendAuthTemplate");
