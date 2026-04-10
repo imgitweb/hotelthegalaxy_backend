@@ -1,11 +1,10 @@
-const {attendance} = require("../models/attendance"); 
-
+const Attendance = require("../models/attendance"); // Model इम्पोर्ट करें
 
 exports.markAttendance = async (req, res) => {
   try {
     // 1. Frontend से भेजा गया डेटा निकालें
     const { qrData, lat, lng, deviceId } = req.body;
-    const staffId = req.staff.id; // verifyStaffToken मिडलवेयर से मिलेगा
+    const staffId = req.staff.id; // verifyStaffToken/staffAuth मिडलवेयर से मिलेगा
 
     // 2. Photo चेक करें
     if (!req.file) {
@@ -21,13 +20,12 @@ exports.markAttendance = async (req, res) => {
       });
     }
 
-    // 4. (Optional) आप Backend में भी Distance चेक कर सकते हैं सिक्योरिटी के लिए 
-    // ताकि कोई Fake GPS इस्तेमाल न कर सके। (अभी हम Frontend के डेटा पर भरोसा कर रहे हैं)
+    // 4. Photo URL जनरेट करें
+    // यह URL डेटाबेस में सेव होगा, ताकि Frontend इसे सीधा पढ़ सके
+    const photoUrl = `/uploads/staff/${req.file.filename}`; 
 
     // 5. Database में Attendance Save करें
-    const photoUrl = `/uploads/${req.file.filename}`; // सेव की गई इमेज का पाथ
-
-    const newAttendance = new attendance({
+    const newAttendance = new Attendance({
       staffId: staffId,
       date: new Date(),
       checkInTime: new Date(),
