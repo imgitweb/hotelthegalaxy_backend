@@ -5,7 +5,6 @@ const { z } = require("zod");
 
 const Order = require("../../models/User/ordersModel");
 
-
 const {
   checkUserExists, registerNewUser, getOrCreateSession, getActiveOrder, getActiveOrdersToday,
   getTodayRosterItems, searchTodayRosterItems, getUserAddresses, getUserOrderStats, 
@@ -15,20 +14,13 @@ const {
   verifyLocationByCoords, getActiveOffers 
 } = require("../tools/orderTools");
 
-
 const userContextMemory = {}; 
 const paymentAttemptsMemory = {}; 
 const pendingLocationMemory = {}; 
 const pendingQuantityMemory = {}; 
 
-// const llm = new ChatOpenAI({ 
-//   openAIApiKey: process.env.OPENAI_API_KEY, 
-//   modelName: "gpt-4o-mini", 
-//   temperature: 0 
-// });
-
 // 🔥 YAHAN APNE LOGO KA PUBLIC URL DAALEIN 🔥
-const HOTEL_LOGO_URL = process.env.LOGO_IMG_URL || "https://instasize.com/api/image/3aabe1c01be83d90190437a6172108e4457cbbe58d3500147dfeb5d8d567bc90.jpeg"; // Yahan apna URL replace karein
+const HOTEL_LOGO_URL = process.env.LOGO_IMG_URL || "https://instasize.com/api/image/3aabe1c01be83d90190437a6172108e4457cbbe58d3500147dfeb5d8d567bc90.jpeg";
 
 const llm = new ChatOpenAI({ 
   openAIApiKey: process.env.OPENAI_API_KEY, 
@@ -57,9 +49,31 @@ const IntentSchema = z.object({
 
 const aiBrain = llm.withStructuredOutput(IntentSchema, { strict: true });
 
+// 🔥 SMART ICONS FOR CATEGORIES
+function getCategoryIcon(catName) {
+  const name = catName.toLowerCase();
+  if (name.includes("starter")) return "🥟";
+  if (name.includes("main course") || name.includes("sabzi")) return "🍛";
+  if (name.includes("bread") || name.includes("roti") || name.includes("naan") || name.includes("kulcha")) return "🫓";
+  if (name.includes("rice") || name.includes("biryani") || name.includes("pulao")) return "🍚";
+  if (name.includes("dessert") || name.includes("sweet") || name.includes("ice cream")) return "🍨";
+  if (name.includes("beverage") || name.includes("drink") || name.includes("shake")) return "🍹";
+  if (name.includes("thali")) return "🍱";
+  if (name.includes("pizza")) return "🍕";
+  if (name.includes("chinese") || name.includes("noodle") || name.includes("manchurian") || name.includes("pasta")) return "🍜";
+  if (name.includes("combo")) return "📦";
+  if (name.includes("soup")) return "🥣";
+  if (name.includes("salad") || name.includes("papad") || name.includes("raita")) return "🥗";
+  if (name.includes("paneer")) return "🧀";
+  if (name.includes("dal")) return "🍲";
+  if (name.includes("breakfast") || name.includes("nashta") || name.includes("snack")) return "🥪";
+  if (name.includes("burger") || name.includes("fast food")) return "🍔";
+  if (name.includes("south indian") || name.includes("dosa") || name.includes("idli")) return "🌮";
+  return "🍽️"; 
+}
+
 function createInteractiveMenu(items, listTitle, listBody) {
   const rows = items.slice(0, 10).map(item => {
-    
     let descText = `₹${item.basePrice}`;
     if (item.originalPrice && item.originalPrice > item.basePrice) {
         descText = `₹${item.basePrice} (Offer) | was ₹${item.originalPrice}`;
@@ -100,6 +114,15 @@ async function agentDecisionNode(state) {
     return { ...state, aiIntent: "PROVIDE_SHARED_LOCATION", aiData: { location: locationData } };
   }
 
+  // 🔥 FIX: New User Registration Logic Capture
+  const isAskingName = previousBotMessage.includes("apna naam");
+  if (isAskingName && msg.length > 0) {
+    if (msg.includes("btn_") || msg.includes("skip")) {
+       return { ...state, aiIntent: "SHOW_MENU", aiData: {} };
+    }
+    return { ...state, aiIntent: "PROVIDE_NAME", aiData: { user_name: rawMsg } };
+  }
+
   if (previousBotMessage.includes("makaan/flat number")) {
     return { ...state, aiIntent: "PROVIDE_HOUSE_NUMBER", aiData: { house_number: rawMsg } };
   }
@@ -108,11 +131,6 @@ async function agentDecisionNode(state) {
   if (isAskingAddress) {
     if (msg === "home" || msg.includes("home") || msg === "1") return { ...state, aiIntent: "SELECT_SAVED_ADDRESS", aiData: { address_index: 1 } };
     if (msg.includes("add new") || msg === "2" || msg === "3" || msg.includes("btn_new_address")) return { ...state, aiIntent: "PROMPT_NEW_ADDRESS", aiData: {} };
-  }
-
-  const isAskingName = previousBotMessage.includes("apna naam bataein") || previousBotMessage.includes("naam bata sakte hain");
-  if (isAskingName && msg.length > 0) {
-    return { ...state, aiIntent: "PROVIDE_NAME", aiData: { user_name: rawMsg } };
   }
 
   if (msg.startsWith("add_")) {
@@ -173,22 +191,22 @@ async function actionExecutionNode(state) {
   const { aiIntent, aiData, phone, inputText } = state;
   let user = await checkUserExists(phone);
 
-  // 🔥 NAYA: Unregistered User (Naya User) ke liye Logo ke sath welcome
-  if (!user && aiIntent !== "PROVIDE_NAME" && aiIntent !== "GENERAL_INFO") {
-    let replyText = "👑 *Welcome to Hotel The Galaxy!*\n\nKripya apna naam type karke bhejein,\ntaaki hum aapko behtar serve kar sakein.";
-    userContextMemory[phone] = replyText;
-    
-    let interactive = { 
-      type: "button", 
-      header: { 
-        type: "image", 
-        image: { link: HOTEL_LOGO_URL } 
-      },
-      body: { text: replyText }, 
-      action: { buttons: [ { type: "reply", reply: { id: "btn_menu", title: "🍔 Skip & See Menu" } } ] } 
-    };
-    
-    return { ...state, replyText, interactive };
+  // 🔥 FIX: Guest User Bypass so they aren't blocked from ordering
+  if (!user && aiIntent !== "PROVIDE_NAME") {
+    if (aiIntent === "SHOW_MENU" || inputText.toLowerCase().includes("skip") || inputText.toLowerCase().includes("btn_")) {
+        user = await registerNewUser(phone, "Guest");
+    } else {
+        let replyText = "👑 *Welcome to Hotel The Galaxy!*\n\nKripya apna naam type karke bhejein,\ntaaki hum aapko behtar serve kar sakein.";
+        userContextMemory[phone] = replyText;
+        
+        let interactive = { 
+          type: "button", 
+          header: { type: "image", image: { link: HOTEL_LOGO_URL } },
+          body: { text: replyText }, 
+          action: { buttons: [ { type: "reply", reply: { id: "btn_menu", title: "🍔 Skip & See Menu" } } ] } 
+        };
+        return { ...state, replyText, interactive };
+    }
   }
 
   const session = await getOrCreateSession(phone); 
@@ -196,7 +214,6 @@ async function actionExecutionNode(state) {
   let interactive = null; 
 
   switch (aiIntent) {
-    // 🔥 NAYA: Naam set hone ke baad Logo ke sath welcome
     case "PROVIDE_NAME": {
       const extractedName = aiData?.user_name || inputText.trim() || "Guest";
       if (!user) user = await registerNewUser(phone, extractedName);
@@ -209,7 +226,6 @@ async function actionExecutionNode(state) {
       };
       break;
     }
-    // 🔥 NAYA: Purane (Registered) User ko Logo ke sath welcome
     case "GREETING": {
       const activeOrders = await getActiveOrdersToday(user._id);
       replyText = `👑 *Welcome back, ${user.fullName}!*\n\nHotel The Galaxy mein aapka swagat hai.\nAaj kya order karna chahenge aap?`;
@@ -283,13 +299,23 @@ async function actionExecutionNode(state) {
       }
       break;
     }
+    // 🔥 FIX: Beautiful Category List with Icons
     case "SHOW_MENU": {
       const categories = await getAvailableCategoriesToday();
       if (!categories || categories.length === 0) { 
         replyText = "Humare chefs menu prepare kar rahe hain.\nKripya thodi der mein try karein!"; 
         break; 
       }
-      const rows = categories.slice(0, 10).map(cat => ({ id: `cat_${cat._id}`, title: cat.name.substring(0, 24), description: "Tap karke items dekhein" }));
+      
+      const rows = categories.slice(0, 10).map(cat => {
+        const icon = getCategoryIcon(cat.name);
+        return { 
+           id: `cat_${cat._id}`, 
+           title: `${icon} ${cat.name}`.substring(0, 24), 
+           description: "Tap karke items dekhein" 
+        };
+      });
+
       interactive = { type: "list", header: { type: "text", text: "🍽️ Hotel The Galaxy Menu" }, body: { text: "Neeche diye gaye button par click karke category select karein 👇" }, action: { button: "📋 Menu Dekhein", sections: [{ title: "Categories", rows: rows }] } };
       break;
     }
