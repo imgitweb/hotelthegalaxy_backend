@@ -5,6 +5,8 @@ const Review = require("../../models/reviewModel");
 const Address = require("../../models/User/address");
 const getDistanceKm = require("../../utils/distanceService");
 const { calculateETA } = require("../../utils/calculateETA");
+const { generateOTP, hashOTP } = require("../../utils/otp");
+const { sendAuthTemplate } = require("../../utils/whatsaap/sendAuthTemplate");
 
 const HOTEL_LOCATION = {
   lat: 22.061401,
@@ -17,9 +19,13 @@ function calculateDeliveryCharge(distanceKm) {
   return 100;
 }
 
-// ─────────────────────────────────────────
-// CREATE ORDER (direct — without payment)
-// ─────────────────────────────────────────
+
+
+
+
+
+
+
 exports.createOrder = async (req, res, next) => {
   try {
     const { items, addressId } = req.body;
@@ -170,6 +176,9 @@ exports.createOrder = async (req, res, next) => {
     next(error);
   }
 };
+
+
+
 exports.getMyOrders = async (req, res, next) => {
   try {
     const orders = await Order.find({ user: req.userId })

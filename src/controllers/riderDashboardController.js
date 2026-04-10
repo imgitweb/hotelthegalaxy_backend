@@ -273,6 +273,8 @@ exports.getActiveTrip = async (req, res, next) => {
   }
 };
 
+
+
 exports.markOrderArrived = async (req, res, next) => {
   try {
     res.set({
@@ -338,6 +340,9 @@ exports.markOrderArrived = async (req, res, next) => {
   }
 };
 
+
+
+
 exports.verifyDeliveryOTP = async (req, res, next) => {
   try {
     res.set({
@@ -350,52 +355,43 @@ exports.verifyDeliveryOTP = async (req, res, next) => {
     const { otp } = req.body;
     const riderId = req.riderId;
 
-    const order = await Order.findById(orderId).populate(
-      "user",
-      "fullName phone"
-    );
+    const order = await Order.findById(orderId).populate("user", "fullName phone");
 
     if (!order) {
-      return res.status(404).json({
-        success: false,
-        message: "Order not found",
-      });
+      return res.status(404).json({ success: false, message: "Order not found" });
     }
 
     if (order.rider?.toString() !== riderId?.toString()) {
-      return res.status(403).json({
-        success: false,
-        message: "You are not assigned to this order",
-      });
+      return res.status(403).json({ success: false, message: "You are not assigned to this order" });
     }
 
     if (order.status === "delivered") {
+      return res.status(400).json({ success: false, message: "Order already delivered" });
+    }
+
+    const { hashOTP } = require("../utils/otp");
+
+    // ✅ maxAttempts check pehle
+    if (order.deliveryOTP.attempts >= order.deliveryOTP.maxAttempts) {
       return res.status(400).json({
         success: false,
-        message: "Order already delivered",
+        message: "Maximum OTP attempts exceeded",
+        attemptsRemaining: 0,
       });
     }
 
-    if (order.deliveryOTP.code !== otp) {
+    // ✅ sha256 se compare
+    const isMatch = hashOTP(otp) === order.deliveryOTP.code;
+
+    if (!isMatch) {
       order.deliveryOTP.attempts += 1;
-
-      if (order.deliveryOTP.attempts >= order.deliveryOTP.maxAttempts) {
-        return res.status(400).json({
-          success: false,
-          message: "Maximum OTP attempts exceeded",
-          attemptsRemaining: 0,
-        });
-      }
-
       await order.save();
 
+      const remaining = order.deliveryOTP.maxAttempts - order.deliveryOTP.attempts;
       return res.status(400).json({
         success: false,
-        message: `Invalid OTP. ${
-          order.deliveryOTP.maxAttempts - order.deliveryOTP.attempts
-        } attempts remaining`,
-        attemptsRemaining:
-          order.deliveryOTP.maxAttempts - order.deliveryOTP.attempts,
+        message: `Invalid OTP. ${remaining} attempts remaining`,
+        attemptsRemaining: remaining,
       });
     }
 
@@ -407,9 +403,7 @@ exports.verifyDeliveryOTP = async (req, res, next) => {
     const trip = await Trip.findById(order.tripId).populate("orderIds");
 
     if (trip) {
-      const allDelivered = trip.orderIds.every(
-        (o) => o.status === "delivered"
-      );
+      const allDelivered = trip.orderIds.every((o) => o.status === "delivered");
 
       if (allDelivered) {
         trip.status = "Completed";
@@ -438,6 +432,8 @@ exports.verifyDeliveryOTP = async (req, res, next) => {
     next(error);
   }
 };
+
+
 
 exports.getRiderHistory = async (req, res, next) => {
   try {

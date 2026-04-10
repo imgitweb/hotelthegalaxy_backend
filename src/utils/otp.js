@@ -9,7 +9,6 @@ exports.hashOTP = (otp) =>
 exports.generateOTPMap = (orderIds) => {
   const otpMap = {};
   orderIds.forEach(orderId => {
-    // Generate 4-digit OTP as per spec
     otpMap[orderId.toString()] = Math.floor(1000 + Math.random() * 9000).toString();
   });
   return otpMap;
