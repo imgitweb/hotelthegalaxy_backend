@@ -9,7 +9,8 @@ function normalizePhone(phone) {
   return String(phone).replace(/[^\d]/g, "");
 }
 
-async function runLangGraph({ phone, text, channel = "whatsapp" }) {
+// 🔥 FIX: Yahan parameters mein 'location' add kiya gaya hai
+async function runLangGraph({ phone, text, location, channel = "whatsapp" }) {
   const normalizedPhone = normalizePhone(phone);
   if (!normalizedPhone) return;
 
@@ -17,6 +18,8 @@ async function runLangGraph({ phone, text, channel = "whatsapp" }) {
     const output = await graph.invoke({
       phone: normalizedPhone,
       inputText: text,
+      // 🔥 FIX: 'extractedMsg' hata kar 'location' variable use kiya
+      location: location || null, 
     });
 
     console.log(`✅ LangGraph output for ${channel}:`, output);
@@ -30,7 +33,7 @@ async function runLangGraph({ phone, text, channel = "whatsapp" }) {
           await sendTextMessage(normalizedPhone, output.replyText);
         }
       } catch (sendError) {
-        console.error("❌ Failed to send WhatsApp message");
+        console.error("❌ Failed to send WhatsApp message", sendError);
       }
     }
 

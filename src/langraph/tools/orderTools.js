@@ -10,6 +10,7 @@ const DailyRoster = require("../../models/dining/DailyRoster");
 const razorpay = require("../../config/razorpay"); 
 const SubCategory = require("../../models/dining/SubCategory"); 
 const Setting = require("../../models/Setting"); 
+const Combo = require("../../models/dining/combomodel"); 
 const mongoose = require("mongoose");
 const axios = require("axios");
 
@@ -28,7 +29,7 @@ function calculateDistance(lat1, lon1, lat2, lon2) {
 async function verifyDeliveryLocation(area, landmark) {
   try {
     const GOOGLE_API_KEY = process.env.GOOGLE_MAPS_API_KEY;
-    const MAX_DISTANCE_KM = parseFloat(process.env.MAX_DISTANCE_KM) || 5;
+    const MAX_DISTANCE_KM = parseFloat(process.env.MAX_DISTANCE_KM) || 6;
     const HOTEL_LAT = process.env.HOTEL_LAT || 22.061401;
     const HOTEL_LNG = process.env.HOTEL_LNG || 78.94776;
 
@@ -41,8 +42,8 @@ async function verifyDeliveryLocation(area, landmark) {
     const { lat, lng } = result.geometry.location;
     const formattedAddress = result.formatted_address;
 
-    if (!formattedAddress.toLowerCase().includes("chhindwara")) {
-      return { status: false, message: `Maaf kijiyega, aapka address '*${formattedAddress}*' Chhindwara se bahar lag raha hai. Humari delivery sirf Chhindwara city ke andar available hai.` };
+    if (!formattedAddress.toLowerCase().includes("madhya pradesh")) {
+      return { status: false, message: `Maaf kijiyega, aapka address '*${formattedAddress}*' Madhya Pradesh se bahar lag raha hai. Humari delivery sirf Madhya Pradesh ke andar available hai.` };
     }
 
     const distRes = await axios.get("https://maps.googleapis.com/maps/api/distancematrix/json", { params: { origins: `${HOTEL_LAT},${HOTEL_LNG}`, destinations: `${lat},${lng}`, key: GOOGLE_API_KEY } });
@@ -61,29 +62,219 @@ async function verifyDeliveryLocation(area, landmark) {
   } catch (error) { return { status: false, message: "Location check karne mein technical error aaya." }; }
 }
 
+async function verifyLocationByCoords(lat, lng) {
+  try {
+    const GOOGLE_API_KEY = process.env.GOOGLE_MAPS_API_KEY;
+    const MAX_DISTANCE_KM = parseFloat(process.env.MAX_DISTANCE_KM) || 6;
+    const HOTEL_LAT = process.env.HOTEL_LAT || 22.061401;
+    const HOTEL_LNG = process.env.HOTEL_LNG || 78.94776;
+
+    const distRes = await axios.get("https://maps.googleapis.com/maps/api/distancematrix/json", {
+      params: { origins: `${HOTEL_LAT},${HOTEL_LNG}`, destinations: `${lat},${lng}`, key: GOOGLE_API_KEY },
+    });
+
+    const element = distRes.data.rows[0].elements[0];
+    if (element.status !== "OK") return { status: false, message: "Distance calculate karne mein issue aaya." };
+
+    const distanceKm = element.distance.value / 1000;
+    const distanceText = element.distance.text;
+
+    if (distanceKm > MAX_DISTANCE_KM) {
+      return { status: false, message: `Aapki location hotel se *${distanceText}* door hai. Humari max delivery range *${MAX_DISTANCE_KM}km* hai.` };
+    }
+
+    const geoRes = await axios.get("https://maps.googleapis.com/maps/api/geocode/json", {
+      params: { latlng: `${lat},${lng}`, key: GOOGLE_API_KEY },
+    });
+
+    let formattedAddress = "Shared via WhatsApp";
+    if (geoRes.data.status === "OK" && geoRes.data.results.length > 0) {
+      formattedAddress = geoRes.data.results[0].formatted_address;
+    }
+
+    if (!formattedAddress.toLowerCase().includes("madhya pradesh")) {
+      return { status: false, message: `Humari delivery sirf Madhya Pradesh ke andar available hai.` };
+    }
+
+    return { status: true, lat, lng, formattedAddress, distanceKm };
+  } catch (error) {
+    return { status: false, message: "Location check karne mein technical error aaya." };
+  }
+}
+
 async function checkUserExists(phone) { return await User.findOne({ phone }); }
 async function registerNewUser(phone, fullName) { return await User.create({ phone, role: "customer", fullName: fullName || "Guest", authProvider: "whatsapp", isActive: true }); }
 async function getOrCreateSession(phone) { let session = await Session.findOne({ phone }); if (!session) session = await Session.create({ phone, cart: [] }); return session; }
 async function getActiveOrder(userId) { return await Order.findOne({ user: userId, status: { $nin: ["delivered", "cancelled"] } }).sort({ createdAt: -1 }).lean(); }
-async function getCategories() { return await Category.find({ isActive: true }).lean(); }
+
+async function getActiveOrdersToday(userId) {
+  try {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    return await Order.find({ 
+        user: userId, 
+        createdAt: { $gte: today },
+        status: { $nin: ["delivered", "cancelled", "rejected"] } 
+    }).sort({ createdAt: -1 }).lean();
+  } catch (error) { return []; }
+}
+
+async function getCategories() { 
+  const cats = await Category.find({ isActive: true }).lean(); 
+  const comboCount = await Combo.countDocuments({});
+  if (comboCount > 0) {
+    cats.unshift({ _id: "combos_virtual", name: "Special Combos" });
+  }
+  return cats;
+}
 
 async function getTodayRosterItems() { 
   const today = new Date(); today.setHours(0, 0, 0, 0);
   const roster = await DailyRoster.findOne({ date: { $gte: today, $lt: new Date(today.getTime() + 24 * 60 * 60 * 1000) } }).populate("items.id"); 
-  if (!roster || !roster.items) return [];
-  return roster.items.filter(item => item.id && item.quantity > 0).map(item => ({ _id: item.id._id, name: item.id.name, basePrice: item.id.basePrice, category: item.id.category, maxAllowed: item.quantity, availableNow: item.quantity }));
+  
+  let activeOffers = [];
+  try {
+    const now = new Date();
+    const startOfToday = new Date(now);
+    startOfToday.setUTCHours(0, 0, 0, 0);
+
+    activeOffers = await Offer.find({ 
+        isActive: true,
+        startDate: { $lte: now }, 
+        endDate: { $gte: startOfToday }
+    }).lean();
+  } catch(e) { console.error("Offer fetch error:", e); }
+
+  let items = [];
+  
+  if (roster && roster.items) {
+    const regularItems = roster.items.filter(item => item.id && item.quantity > 0).map(item => {
+      let originalPrice = item.id.basePrice;
+      let finalPrice = originalPrice;
+      let appliedOffer = null;
+
+      for(let offer of activeOffers) {
+        if (offer.items && offer.items.map(i => String(i)).includes(String(item.id._id))) {
+          if (offer.discountType === "PERCENTAGE") {
+            finalPrice = finalPrice - (finalPrice * offer.discountValue / 100);
+          } else if (offer.discountType === "FLAT") {
+            finalPrice = finalPrice - offer.discountValue;
+          }
+          appliedOffer = offer.name;
+          break; 
+        }
+      }
+      finalPrice = Math.max(0, Math.round(finalPrice));
+
+      return { 
+        _id: item.id._id, 
+        name: item.id.name, 
+        basePrice: finalPrice, 
+        originalPrice: originalPrice, 
+        category: item.id.category, 
+        maxAllowed: item.quantity, 
+        availableNow: item.quantity,
+        isCombo: false,
+        offerName: appliedOffer
+      };
+    });
+    items.push(...regularItems);
+  }
+
+  try {
+      const combos = await Combo.find({}).populate("items.item", "name").lean();
+      
+      const comboItems = combos.map(c => {
+         let originalPrice = c.price;
+         let finalPrice = originalPrice;
+         let appliedOffer = null;
+
+         for(let offer of activeOffers) {
+           if (offer.combos && offer.combos.map(id => String(id)).includes(String(c._id))) {
+             if (offer.discountType === "PERCENTAGE") {
+               finalPrice = finalPrice - (finalPrice * offer.discountValue / 100);
+             } else if (offer.discountType === "FLAT") {
+               finalPrice = finalPrice - offer.discountValue;
+             }
+             appliedOffer = offer.name;
+             break;
+           }
+         }
+         finalPrice = Math.max(0, Math.round(finalPrice));
+
+         let includedNames = "";
+         if (c.items && c.items.length > 0) {
+             includedNames = c.items.map(i => i.item && i.item.name ? i.item.name : "").filter(Boolean).join(" + ");
+         }
+
+         return {
+             _id: c._id,
+             name: `${c.name}`, 
+             basePrice: finalPrice,
+             originalPrice: originalPrice,
+             category: "combos_virtual",
+             maxAllowed: 10, 
+             availableNow: 10,
+             isCombo: true,
+             offerName: appliedOffer,
+             includedItems: includedNames 
+         };
+      });
+      items.push(...comboItems);
+  } catch(e) { console.log("Combo fetch error:", e); }
+
+  return items;
+}
+
+async function searchTodayRosterItems(searchTerm) {
+  if (!searchTerm) return [];
+  const term = searchTerm.toLowerCase().trim();
+  const allItems = await getTodayRosterItems();
+  return allItems.filter(item => item.name.toLowerCase().includes(term));
+}
+
+async function getAvailableCategoriesToday() {
+  try {
+    const rosterItems = await getTodayRosterItems();
+    if (!rosterItems.length) return [];
+
+    const rosterItemIds = rosterItems.filter(i => !i.isCombo).map(item => item._id);
+    const menuItems = await MenuItem.find({ _id: { $in: rosterItemIds } }).lean();
+    
+    const subCatIds = [...new Set(menuItems.map(m => String(m.subCategory)))];
+    const subCats = await SubCategory.find({ _id: { $in: subCatIds } }).lean();
+    
+    const categoryIds = [...new Set(subCats.map(sc => String(sc.category)))];
+    const categories = await Category.find({ _id: { $in: categoryIds }, isActive: true }).lean();
+
+    const hasCombos = rosterItems.some(i => i.isCombo);
+    if (hasCombos) {
+      categories.unshift({ _id: "combos_virtual", name: "Special Combos" });
+    }
+
+    return categories;
+  } catch (error) {
+    return [];
+  }
 }
 
 async function getMenuByCategory(categoryId) { 
   try {
+    const rosterItems = await getTodayRosterItems();
+    
+    if (categoryId === "combos_virtual") {
+       return rosterItems.filter(item => item.isCombo);
+    }
+
     const subCategories = await SubCategory.find({ category: categoryId }).lean();
     const subCategoryIds = subCategories.map(sc => String(sc._id));
     if (subCategoryIds.length === 0) return [];
+    
     const menuItems = await MenuItem.find({ subCategory: { $in: subCategoryIds } }).lean();
     const menuItemIds = menuItems.map(item => String(item._id));
     if (menuItemIds.length === 0) return [];
-    const rosterItems = await getTodayRosterItems();
-    return rosterItems.filter(rosterItem => menuItemIds.includes(String(rosterItem._id)));
+    
+    return rosterItems.filter(rosterItem => !rosterItem.isCombo && menuItemIds.includes(String(rosterItem._id)));
   } catch (error) { return []; }
 }
 
@@ -107,29 +298,41 @@ async function addItemsToCart(phone, items) {
   for (const it of items) {
     const name = String(it.name || "").toLowerCase(); const qtyRequested = Math.max(1, parseInt(it.quantity || it.qty || 1));
     const rosterItem = rosterItems.find((m) => m.name.toLowerCase().includes(name));
-    if (!rosterItem) { feedbackMessages.push(`❌ *${it.name}* aaj ke menu mein available nahi hai.`); continue; }
-    const existing = session.cart.find((x) => String(x.menuItemId) === String(rosterItem._id));
+    
+    if (!rosterItem) { 
+      const partialMatch = rosterItems.find(m => m.name.toLowerCase() === name);
+      if(!partialMatch) {
+         feedbackMessages.push(`❌ *${it.name}* abhi available nahi hai.`); continue; 
+      }
+    }
+    
+    const itemToAdd = rosterItem;
+
+    let finalName = itemToAdd.name;
+    if (itemToAdd.isCombo && itemToAdd.includedItems) {
+        finalName = `${itemToAdd.name} (${itemToAdd.includedItems})`;
+    }
+
+    const existing = session.cart.find((x) => String(x.menuItemId) === String(itemToAdd._id));
     const currentCartQty = existing ? existing.quantity : 0; const newTotalQty = currentCartQty + qtyRequested;
-    if (newTotalQty > rosterItem.maxAllowed) {
-       const allowedToAdd = rosterItem.maxAllowed - currentCartQty;
+    if (newTotalQty > itemToAdd.maxAllowed) {
+       const allowedToAdd = itemToAdd.maxAllowed - currentCartQty;
        if (allowedToAdd > 0) {
-           feedbackMessages.push(`⚠️ *${rosterItem.name}* ke liye aap max *${rosterItem.maxAllowed}* order kar sakte hain. Humne cart mein baaki *${allowedToAdd}* add kar diya hai.`);
+           feedbackMessages.push(`⚠️ *${itemToAdd.name}* ke liye aap max *${itemToAdd.maxAllowed}* order kar sakte hain.`);
            if (existing) { existing.quantity += allowedToAdd; existing.total = existing.quantity * existing.price; } 
-           else { session.cart.push({ menuItemId: rosterItem._id, name: rosterItem.name, price: rosterItem.basePrice, quantity: allowedToAdd, total: rosterItem.basePrice * allowedToAdd }); }
-       } else { feedbackMessages.push(`⚠️ Aap already *${rosterItem.name}* ki maximum limit cart mein add kar chuke hain.`); }
+           else { session.cart.push({ menuItemId: itemToAdd._id, isCombo: itemToAdd.isCombo, name: finalName, price: itemToAdd.basePrice, quantity: allowedToAdd, total: itemToAdd.basePrice * allowedToAdd }); }
+       } else { feedbackMessages.push(`⚠️ Aap already *${itemToAdd.name}* ki maximum limit cart mein add chuke hain.`); }
     } else {
-       feedbackMessages.push(`✅ *${qtyRequested}x ${rosterItem.name}* cart mein add ho gaya.`);
+       feedbackMessages.push(`✅ *${qtyRequested}x ${itemToAdd.name}* cart mein add ho gaya.`);
        if (existing) { existing.quantity += qtyRequested; existing.total = existing.quantity * existing.price; } 
-       else { session.cart.push({ menuItemId: rosterItem._id, name: rosterItem.name, price: rosterItem.basePrice, quantity: qtyRequested, total: rosterItem.basePrice * qtyRequested }); }
+       else { session.cart.push({ menuItemId: itemToAdd._id, isCombo: itemToAdd.isCombo, name: finalName, price: itemToAdd.basePrice, quantity: qtyRequested, total: itemToAdd.basePrice * qtyRequested }); }
     }
   }
-  
-  session.markModified('cart'); // 🔥 BUG FIX: Ensure MongoDB updates the array
+  session.markModified('cart'); 
   await session.save(); 
   return { cart: session.cart, messages: feedbackMessages, setting }; 
 }
 
-// 🔥 BUG FIX: Remove hone par array update karna aur setting bhejna zaroori hai
 async function removeItemsFromCart(phone, items) { 
   const session = await getOrCreateSession(phone); 
   const setting = await Setting.findOne() || { baseFee: 30, freeDeliveryAbove: 500 }; 
@@ -141,15 +344,11 @@ async function removeItemsFromCart(phone, items) {
     if (existingIndex !== -1) {
       const existingItem = session.cart[existingIndex]; 
       existingItem.quantity -= qtyToRemove;
-      if (existingItem.quantity <= 0) { 
-        session.cart.splice(existingIndex, 1); 
-      } else { 
-        existingItem.total = existingItem.quantity * existingItem.price; 
-      }
+      if (existingItem.quantity <= 0) { session.cart.splice(existingIndex, 1); } 
+      else { existingItem.total = existingItem.quantity * existingItem.price; }
     }
   }
-  
-  session.markModified('cart'); // 🔥 BUG FIX: Forces DB to save array mutations accurately
+  session.markModified('cart'); 
   await session.save(); 
   return { cart: session.cart, setting };
 }
@@ -169,7 +368,7 @@ async function placeOrder(phone, paymentMethod) {
 
     orderNumber, user: user._id, items: session.cart, 
     pricing: { subtotal, deliveryCharge, tax: 0, total }, 
-    address: { fullName: user.fullName || "WhatsApp User", phone: phone, street: selectedAddress ? selectedAddress.street : "Store Pickup", landmark: selectedAddress ? selectedAddress.landmark : "", city: "Chhindwara" },
+    address: { fullName: user.fullName || "WhatsApp User", phone: phone, street: selectedAddress ? selectedAddress.street : "Store Pickup", landmark: selectedAddress ? selectedAddress.landmark : "", city: "Madhya Pradesh" },
     payment: { method: paymentMethod, status: paymentMethod === "ONLINE" ? "paid" : "pending" }, status: "pending",
 
     orderNumber,
@@ -242,7 +441,7 @@ async function processBotOrderAndPayment(userId, phone, cartItems, addressId, di
 
     const newOrder = new Order({
       orderNumber: uniqueOrderNumber, orderSource: "whatsapp", user: userId,
-      items: cartItems.map(item => ({ menuItem: item.menuItemId, name: item.name, price: item.price || (item.total / item.quantity), quantity: item.quantity, total: item.total })),
+      items: cartItems.map(item => ({ menuItem: item.isCombo ? null : item.menuItemId, combo: item.isCombo ? item.menuItemId : null, name: item.name, price: item.price || (item.total / item.quantity), quantity: item.quantity, total: item.total })),
       address: { street: fullAddress.street || "Unknown", landmark: fullAddress.landmark || "", label: fullAddress.label || "Home", lat: fullAddress.lat || 0, lng: fullAddress.lng || 0 },
       pricing: { subtotal: subtotal, deliveryCharge: deliveryCharge, tax: 0, total: totalAmount }, 
       totalAmount: totalAmount, noContact: false, paymentStatus: "pending", orderStatus: "confirmed",
@@ -269,16 +468,27 @@ async function checkLatestPaymentStatus(userId) {
 }
 
 async function getActiveOffers() {
-  const now = new Date();
   try {
-    const offers = await Offer.find({ isActive: true, startDate: { $lte: now }, endDate: { $gte: now } }).populate("items"); 
-    return offers;
-  } catch (error) { return []; }
+    const now = new Date();
+    const startOfToday = new Date(now);
+    startOfToday.setUTCHours(0, 0, 0, 0);
+
+    const offers = await Offer.find({ 
+        isActive: true,
+        startDate: { $lte: now },
+        endDate: { $gte: startOfToday } 
+    }).populate("items", "name basePrice").populate("combos", "name price").lean(); 
+    
+    const combos = await Combo.find({}).populate("items.item", "name").lean();
+
+    return { offers, combos };
+  } catch (error) { return { offers: [], combos: [] }; }
 }
 
 module.exports = {
-  checkUserExists, registerNewUser, getOrCreateSession, getActiveOrder, getActiveOffers,
-  getCategories, getMenuByCategory, getUserAddresses, getUserOrderStats, getTodayRosterItems,
-  saveNewAddress, addItemsToCart, placeOrder, cancelOrder, removeItemsFromCart, 
-  processBotOrderAndPayment, checkLatestPaymentStatus, verifyDeliveryLocation
+  checkUserExists, registerNewUser, getOrCreateSession, getActiveOrder, getActiveOrdersToday, getActiveOffers,
+  getCategories, getMenuByCategory, getUserAddresses, getUserOrderStats, getTodayRosterItems, 
+  searchTodayRosterItems, getAvailableCategoriesToday, saveNewAddress, addItemsToCart, 
+  placeOrder, cancelOrder, removeItemsFromCart, processBotOrderAndPayment, 
+  checkLatestPaymentStatus, verifyDeliveryLocation, verifyLocationByCoords
 };
