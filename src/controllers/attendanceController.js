@@ -3,8 +3,11 @@ const Attendance = require("../models/attendance"); // Model इम्पोर�
 exports.markAttendance = async (req, res) => {
   try {
     // 1. Frontend से भेजा गया डेटा निकालें
+    
     const { qrData, lat, lng, deviceId } = req.body;
-    const staffId = req.staff.id; // verifyStaffToken/staffAuth मिडलवेयर से मिलेगा
+    console.log("attendence ----------------------------------",req.body)
+    console.log("IO--------------------------",req.user.id)
+    const staffId = req.user.id; // verifyStaffToken/staffAuth मिडलवेयर से मिलेगा
 
     // 2. Photo चेक करें
     if (!req.file) {
