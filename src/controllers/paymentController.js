@@ -336,13 +336,14 @@ if (userPhone) {
 
   console.log("📞 FINAL PHONE:", userPhone);
 
-  try {
-    const response = await sendAuthTemplate("+" + userPhone, otp);
-    console.log("📲 WhatsApp OTP Response:", response);
-  } catch (err) {
-    console.error("❌ WhatsApp Error:", err.message);
-  }
-} else {
+//   try {
+//     const response = await sendAuthTemplate("+" + userPhone, otp);
+//     console.log("📲 WhatsApp OTP Response:", response);
+//   } catch (err) {
+//     console.error("❌ WhatsApp Error:", err.message);
+//   }
+}
+ else {
   console.log("❌ Phone still not found");
 }
 
@@ -646,12 +647,12 @@ exports.handleWebhook = async (req, res) => {
         console.log("📞 FINAL PHONE:", userPhone);
 
         // 🔥 SEND OTP TEMPLATE
-        try {
-          const otpRes = await sendAuthTemplate("+" + userPhone, otp);
-          console.log("📲 OTP WhatsApp Response:", otpRes);
-        } catch (err) {
-          console.error("❌ OTP send error:", err.message);
-        }
+        // try {
+        //   const otpRes = await sendAuthTemplate("+" + userPhone, otp);
+        //   console.log("📲 OTP WhatsApp Response:", otpRes);
+        // } catch (err) {
+        //   console.error("❌ OTP send error:", err.message);
+        // }
 
         // 🔥 SEND ORDER MESSAGE
         const orderNumber = updatedOrder.orderNumber;

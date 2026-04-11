@@ -1,75 +1,405 @@
-const { attendance } = require("../models/attendance"); 
+// const { attendance } = require("../models/attendance"); 
 
+// exports.markAttendance = async (req, res) => {
+//   try {
+//     const { qrData, lat, lng, deviceId } = req.body;
+    
+    
+//     const staffId = req.user?.id || req.staff?.id || req.user?._id; 
+
+//     if (!staffId) {
+//       return res.status(401).json({ message: "Unauthorized! User ID not found." });
+//     }
+
+    
+//     if (!req.file) {
+//       return res.status(400).json({ message: "Photo is required. Please capture a selfie." });
+//     }
+
+//     // 4. QR Code Validate करें (.env से)
+//     const expectedQrId = process.env.QR_ID;
+    
+//     if (qrData !== expectedQrId) {
+//       return res.status(400).json({ 
+//         message: "Invalid QR Code. Please scan the correct Hotel QR." 
+//       });
+//     }
+
+    
+//     const photoUrl = `/uploads/staff/${req.file.filename}`; 
+
+    
+//     const todayString = new Date().toLocaleDateString('en-CA'); // 'en-CA' हमेशा YYYY-MM-DD देता है
+
+   
+//     const newAttendance = new attendance({
+//       staffId: staffId,
+//       date: todayString, 
+//       checkInTime: new Date(),
+//       location: {
+//         lat: parseFloat(lat),
+//         lng: parseFloat(lng)
+//       },
+//       photo: photoUrl,
+//       deviceId: deviceId || "unknown",
+//       status: "Present"
+//     });
+
+    
+//     await newAttendance.save();
+
+//     // 9. Success Response Frontend को भेजें
+//     return res.status(200).json({
+//       success: true,
+//       message: "Attendance marked successfully ✅",
+//       data: newAttendance
+//     });
+
+//   } catch (error) {
+//     console.error("Mark Attendance Error:", error);
+
+//     // 🔥 अगर यूज़र ने आज की अटेंडेंस पहले ही लगा दी है (MongoDB Duplicate Key Error - 11000)
+//     if (error.code === 11000) {
+//       return res.status(400).json({ 
+//         success: false, 
+//         message: "You have already marked your attendance for today!" 
+//       });
+//     }
+
+   
+//     return res.status(500).json({ 
+//       success: false, 
+//       message: "Internal Server Error while marking attendance." 
+//     });
+//   }
+// };
+
+
+
+// ─── controllers/attendanceController.js ─────────────────────────────────────
+const { attendance } = require("../models/attendance");
+const Staff          = require("../models/staffModel");
+
+// ─── helpers ─────────────────────────────────────────────────────────────────
+const todayStr = () => new Date().toLocaleDateString("en-CA"); // YYYY-MM-DD
+
+/** Returns true if the given Date is after 09:30 */
+const isLate = (date) => {
+  const h = date.getHours();
+  const m = date.getMinutes();
+  return h > 9 || (h === 9 && m > 30);
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// POST /api/attendance/mark-attendance
+// (existing controller, updated with Late logic + checkout)
+// ─────────────────────────────────────────────────────────────────────────────
 exports.markAttendance = async (req, res) => {
   try {
     const { qrData, lat, lng, deviceId } = req.body;
-    
-    
-    const staffId = req.user?.id || req.staff?.id || req.user?._id; 
+    const staffId = req.user?.id || req.staff?.id || req.user?._id;
 
-    if (!staffId) {
-      return res.status(401).json({ message: "Unauthorized! User ID not found." });
-    }
+    if (!staffId)   return res.status(401).json({ message: "Unauthorized" });
+    if (!req.file)  return res.status(400).json({ message: "Photo is required" });
 
-    
-    if (!req.file) {
-      return res.status(400).json({ message: "Photo is required. Please capture a selfie." });
-    }
+    if (qrData !== process.env.QR_ID)
+      return res.status(400).json({ message: "Invalid QR Code" });
 
-    // 4. QR Code Validate करें (.env से)
-    const expectedQrId = process.env.QR_ID;
-    
-    if (qrData !== expectedQrId) {
-      return res.status(400).json({ 
-        message: "Invalid QR Code. Please scan the correct Hotel QR." 
-      });
-    }
+    const photoUrl   = `/uploads/staff/${req.file.filename}`;
+    const now        = new Date();
+    const dateString = now.toLocaleDateString("en-CA");
+    const status     = isLate(now) ? "Late" : "Present";
 
-    
-    const photoUrl = `/uploads/staff/${req.file.filename}`; 
-
-    
-    const todayString = new Date().toLocaleDateString('en-CA'); // 'en-CA' हमेशा YYYY-MM-DD देता है
-
-   
     const newAttendance = new attendance({
-      staffId: staffId,
-      date: todayString, 
-      checkInTime: new Date(),
-      location: {
-        lat: parseFloat(lat),
-        lng: parseFloat(lng)
-      },
-      photo: photoUrl,
-      deviceId: deviceId || "unknown",
-      status: "Present"
+      staffId,
+      date:        dateString,
+      checkInTime: now,
+      location:    { lat: parseFloat(lat), lng: parseFloat(lng) },
+      photo:       photoUrl,
+      deviceId:    deviceId || "unknown",
+      status,
     });
 
-    
     await newAttendance.save();
 
-    // 9. Success Response Frontend को भेजें
+    // update staff's lastAttendanceAt
+    await Staff.findByIdAndUpdate(staffId, { lastAttendanceAt: now });
+
     return res.status(200).json({
       success: true,
-      message: "Attendance marked successfully ✅",
-      data: newAttendance
+      message: `Attendance marked — ${status} ✅`,
+      data: newAttendance,
     });
-
   } catch (error) {
-    console.error("Mark Attendance Error:", error);
+    if (error.code === 11000)
+      return res.status(400).json({ success: false, message: "Attendance already marked for today!" });
 
-    // 🔥 अगर यूज़र ने आज की अटेंडेंस पहले ही लगा दी है (MongoDB Duplicate Key Error - 11000)
-    if (error.code === 11000) {
-      return res.status(400).json({ 
-        success: false, 
-        message: "You have already marked your attendance for today!" 
+    console.error("markAttendance error:", error);
+    return res.status(500).json({ success: false, message: "Internal Server Error" });
+  }
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// POST /api/attendance/check-out
+// ─────────────────────────────────────────────────────────────────────────────
+exports.checkOut = async (req, res) => {
+  try {
+    const staffId = req.user?.id || req.staff?.id || req.user?._id;
+    if (!staffId) return res.status(401).json({ message: "Unauthorized" });
+
+    const today = todayStr();
+    const record = await attendance.findOne({ staffId, date: today });
+    if (!record) return res.status(404).json({ message: "No check-in found for today" });
+    if (record.checkOutTime) return res.status(400).json({ message: "Already checked out" });
+
+    record.checkOutTime = new Date();
+    await record.save();
+
+    return res.json({ success: true, message: "Checked out ✅", data: record });
+  } catch (err) {
+    console.error("checkOut error:", err);
+    return res.status(500).json({ message: "Internal Server Error" });
+  }
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GET /api/admin/attendance
+// Query params: date, department, status, search, page, limit
+// ─────────────────────────────────────────────────────────────────────────────
+exports.getAttendance = async (req, res) => {
+  try {
+    const {
+      date       = todayStr(),
+      department = "",
+      status     = "",
+      search     = "",
+      page       = 1,
+      limit      = 10,
+    } = req.query;
+
+    const pg  = Math.max(1, parseInt(page));
+    const lim = Math.min(100, Math.max(1, parseInt(limit)));
+    const skip = (pg - 1) * lim;
+
+    // Build attendance query
+    const attQuery = { date };
+    if (status) attQuery.status = status;
+
+    // Build staff filter
+    const staffFilter = { isDeleted: false };
+    if (department) staffFilter.department = department;
+    if (search) {
+      staffFilter.$or = [
+        { name:  new RegExp(search, "i") },
+        { phone: new RegExp(search, "i") },
+      ];
+    }
+
+    // If there's a staff filter, find matching staff IDs first
+    let staffIds = null;
+    if (department || search) {
+      const matchingStaff = await Staff.find(staffFilter).select("_id");
+      staffIds = matchingStaff.map((s) => s._id);
+      attQuery.staffId = { $in: staffIds };
+    }
+
+    const [records, total] = await Promise.all([
+      attendance
+        .find(attQuery)
+        .populate({ path: "staffId", select: "name phone department role photo" })
+        .sort({ checkInTime: 1 })
+        .skip(skip)
+        .limit(lim),
+      attendance.countDocuments(attQuery),
+    ]);
+
+    return res.json({
+      success:    true,
+      data:       records,
+      total,
+      page:       pg,
+      totalPages: Math.ceil(total / lim),
+    });
+  } catch (err) {
+    console.error("getAttendance error:", err);
+    return res.status(500).json({ message: "Internal Server Error" });
+  }
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GET /api/admin/attendance/stats
+// Query: date (YYYY-MM-DD)
+// Returns: { total, present, late, absent }
+// ─────────────────────────────────────────────────────────────────────────────
+exports.getStats = async (req, res) => {
+  try {
+    const date = req.query.date || todayStr();
+
+    // Total active staff
+    const totalStaff = await Staff.countDocuments({ isActive: true, isDeleted: false });
+
+    // Count by status for the date
+    const agg = await attendance.aggregate([
+      { $match: { date } },
+      { $group: { _id: "$status", count: { $sum: 1 } } },
+    ]);
+
+    const counts = { Present: 0, Late: 0, Absent: 0 };
+    agg.forEach((a) => { if (counts[a._id] !== undefined) counts[a._id] = a.count; });
+
+    const markedCount = counts.Present + counts.Late;
+    counts.Absent = Math.max(0, totalStaff - markedCount);
+
+    return res.json({
+      success: true,
+      data: {
+        total:   totalStaff,
+        present: counts.Present,
+        late:    counts.Late,
+        absent:  counts.Absent,
+      },
+    });
+  } catch (err) {
+    console.error("getStats error:", err);
+    return res.status(500).json({ message: "Internal Server Error" });
+  }
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GET /api/admin/attendance/weekly
+// Returns last 7 days aggregate
+// ─────────────────────────────────────────────────────────────────────────────
+exports.getWeekly = async (req, res) => {
+  try {
+    const totalStaff = await Staff.countDocuments({ isActive: true, isDeleted: false });
+
+    // Build last-7-day date strings
+    const days = [];
+    for (let i = 6; i >= 0; i--) {
+      const d = new Date();
+      d.setDate(d.getDate() - i);
+      days.push({
+        date:  d.toLocaleDateString("en-CA"),
+        label: d.toLocaleDateString("en-IN", { weekday: "short", day: "2-digit", month: "short" }),
       });
     }
 
-    // अन्य कोई एरर आने पर
-    return res.status(500).json({ 
-      success: false, 
-      message: "Internal Server Error while marking attendance." 
+    const dateStrings = days.map((d) => d.date);
+
+    const agg = await attendance.aggregate([
+      { $match: { date: { $in: dateStrings } } },
+      {
+        $group: {
+          _id:     { date: "$date", status: "$status" },
+          count:   { $sum: 1 },
+        },
+      },
+    ]);
+
+    // pivot
+    const map = {};
+    agg.forEach(({ _id, count }) => {
+      if (!map[_id.date]) map[_id.date] = { Present: 0, Late: 0, Absent: 0 };
+      if (map[_id.date][_id.status] !== undefined) map[_id.date][_id.status] = count;
     });
+
+    const result = days.map(({ date, label }) => {
+      const d = map[date] || { Present: 0, Late: 0 };
+      const marked = d.Present + d.Late;
+      return {
+        date,
+        label,
+        present: d.Present,
+        late:    d.Late,
+        absent:  Math.max(0, totalStaff - marked),
+        total:   totalStaff,
+      };
+    });
+
+    return res.json({ success: true, data: result });
+  } catch (err) {
+    console.error("getWeekly error:", err);
+    return res.status(500).json({ message: "Internal Server Error" });
+  }
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GET /api/admin/attendance/monthly
+// Returns current-month stats + per-department breakdown
+// ─────────────────────────────────────────────────────────────────────────────
+exports.getMonthly = async (req, res) => {
+  try {
+    const now   = new Date();
+    const year  = now.getFullYear();
+    const month = String(now.getMonth() + 1).padStart(2, "0");
+    const prefix = `${year}-${month}-`;  // "2025-04-"
+
+    // Count distinct days in the month that have at least 1 record
+    const distinctDays = await attendance.distinct("date", {
+      date: { $regex: `^${prefix}` },
+    });
+    const workingDays = distinctDays.length || 1; // avoid div-by-zero
+
+    const totalStaff = await Staff.countDocuments({ isActive: true, isDeleted: false });
+
+    // Aggregate by (date, status)
+    const agg = await attendance.aggregate([
+      { $match: { date: { $regex: `^${prefix}` } } },
+      {
+        $group: {
+          _id:   { date: "$date", status: "$status" },
+          count: { $sum: 1 },
+        },
+      },
+    ]);
+
+    // Total attendances (present + late)
+    let totalPresent = 0;
+    agg.forEach(({ _id, count }) => {
+      if (_id.status === "Present" || _id.status === "Late") totalPresent += count;
+    });
+
+    const avgAttendance = totalStaff
+      ? Math.round((totalPresent / (totalStaff * workingDays)) * 100)
+      : 0;
+    const totalAbsences = Math.max(0, totalStaff * workingDays - totalPresent);
+
+    // Per-department breakdown
+    const deptAgg = await attendance.aggregate([
+      { $match: { date: { $regex: `^${prefix}` } } },
+      {
+        $lookup: {
+          from:         "staffs",
+          localField:   "staffId",
+          foreignField: "_id",
+          as:           "staff",
+        },
+      },
+      { $unwind: "$staff" },
+      {
+        $group: {
+          _id:     "$staff.department",
+          present: {
+            $sum: { $cond: [{ $in: ["$status", ["Present", "Late"]] }, 1, 0] },
+          },
+          total: { $sum: 1 },
+        },
+      },
+    ]);
+
+    const byDept = deptAgg.map((d) => ({
+      department: d._id,
+      present:    d.present,
+      total:      d.total,
+      pct:        Math.round((d.present / Math.max(d.total, 1)) * 100),
+    })).sort((a, b) => b.pct - a.pct);
+
+    return res.json({
+      success: true,
+      data: { workingDays, avgAttendance, totalAbsences, byDept },
+    });
+  } catch (err) {
+    console.error("getMonthly error:", err);
+    return res.status(500).json({ message: "Internal Server Error" });
   }
 };

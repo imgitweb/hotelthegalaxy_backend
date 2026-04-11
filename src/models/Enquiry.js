@@ -33,6 +33,7 @@ const enquirySchema = new mongoose.Schema(
         "Restaurant Reservation",
         "Buffet Enquiry",
         "Banquet Hall",
+        "Other",
       ],
       required: true,
     },

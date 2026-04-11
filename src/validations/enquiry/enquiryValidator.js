@@ -33,6 +33,7 @@ exports.createEnquiryValidator = [
       "Restaurant Reservation",
       "Buffet Enquiry",
       "Banquet Hall",
+      "Other",
     ])
     .withMessage("Invalid enquiry type"),
 
