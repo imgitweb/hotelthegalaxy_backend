@@ -10,43 +10,40 @@ const attendanceController = require("../controllers/attendanceController");
 const { staffAuth } = require("../middleware/staffAuthMiddleware");
 
 // ==========================================
-// MULTER SETUP (सीधा Routes के अंदर)
+// MULTER SETUP
 // ==========================================
 const storage = multer.diskStorage({
   destination: function (req, file, cb) {
-    // पाथ सेट करें: रूट फ़ोल्डर के अंदर public/uploads/staff
     const dir = path.join(__dirname, "../../public/uploads/staff");
-    
-    // अगर फ़ोल्डर नहीं है, तो उसे बना दें
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
-    }
-    
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
     cb(null, dir);
   },
   filename: function (req, file, cb) {
-    // फ़ाइल का नाम यूनिक बनाने के लिए Date.now() का इस्तेमाल
     const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
-    // स्पेस हटाकर डैश लगा रहे हैं ताकि URL में कोई दिक्कत न आए
     cb(null, uniqueSuffix + "-" + file.originalname.replace(/\s+/g, '-')); 
   },
 });
-
 const upload = multer({ storage: storage });
 
 // ==========================================
-// API ROUTES
+// AUTHENTICATION ROUTES
 // ==========================================
-
+router.post("/check-status", controller.checkStaffStatus); // Naya: Check if password exists
+router.post("/login-password", controller.loginWithPassword); // Naya: Login with password
 router.post("/send-otp", controller.sendOtp);
-router.post("/verify-otp", controller.verifyOtp);
+router.post("/verify-otp-set-password", controller.verifyOtpAndSetPassword); // Naya: Set password
 
-// Attendance Route
+// ==========================================
+// ATTENDANCE ROUTE
+// ==========================================
 router.post(
   "/mark-attendance",
   staffAuth,
-  upload.single("photo"), // frontend से 'photo' नाम से आने वाली इमेज
+  upload.single("photo"),
   attendanceController.markAttendance
 );
+
+// Apni routes file mein ye line add karein:
+router.get("/my-stats", staffAuth, attendanceController.getMyAttendanceStats);
 
 module.exports = router;

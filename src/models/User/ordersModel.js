@@ -227,6 +227,7 @@ const orderSchema = new mongoose.Schema(
         "arrived",
         "delivered",
         "cancelled",
+        "rejected",
       ],
       default: "pending",
     },
@@ -283,11 +284,11 @@ const orderSchema = new mongoose.Schema(
       },
     },
 
-    source: {
-      type: String,
-      enum: ["website", "whatsapp"],
-      default: "website",
-    },
+    // source: {
+    //   type: String,
+    //   enum: ["website", "whatsapp"],
+    //   default: "website",
+    // },
 
     noContact: {                  // ✅ fix: checkout page sends this but field missing tha
       type: Boolean,

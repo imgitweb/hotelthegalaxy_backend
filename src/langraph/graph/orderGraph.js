@@ -7,6 +7,7 @@ const Order = require("../../models/User/ordersModel");
 
 const {
   checkUserExists, registerNewUser, getOrCreateSession, getActiveOrder, getActiveOrdersToday,
+  getPendingOrders, getPaymentLinkByOrderId, 
   getTodayRosterItems, searchTodayRosterItems, getUserAddresses, getUserOrderStats, 
   getCategories, getMenuByCategory, getAvailableCategoriesToday,
   saveNewAddress, addItemsToCart, placeOrder, cancelOrder, removeItemsFromCart, 
@@ -19,7 +20,6 @@ const paymentAttemptsMemory = {};
 const pendingLocationMemory = {}; 
 const pendingQuantityMemory = {}; 
 
-// 🔥 YAHAN APNE LOGO KA PUBLIC URL DAALEIN 🔥
 const HOTEL_LOGO_URL = process.env.LOGO_IMG_URL || "https://instasize.com/api/image/3aabe1c01be83d90190437a6172108e4457cbbe58d3500147dfeb5d8d567bc90.jpeg";
 
 const llm = new ChatOpenAI({ 
@@ -33,7 +33,9 @@ const IntentSchema = z.object({
     "GREETING", "SHOW_MENU", "SELECT_CATEGORY", "SEARCH_ITEM", "ADD_TO_CART", "REMOVE_FROM_CART", 
     "CHECKOUT", "PROVIDE_ADDRESS", "PROVIDE_SHARED_LOCATION", "PROVIDE_HOUSE_NUMBER", "SELECT_SAVED_ADDRESS", "PROMPT_NEW_ADDRESS", "PROVIDE_NAME", 
     "COMPLETE_ORDER", "TRACK_ORDER", "ORDER_STATS", 
-    "CANCEL_ORDER", "HELP", "GENERAL_INFO", "SHOW_OFFERS", "SHOW_ALL_TODAY", "PROMPT_QUANTITY", "HANDLE_QUANTITY_SELECTION", "UNKNOWN" 
+    "CANCEL_ORDER", "HELP", "GENERAL_INFO", "SHOW_OFFERS", "SHOW_ALL_TODAY", "PROMPT_QUANTITY", "HANDLE_QUANTITY_SELECTION", 
+    "VIEW_PENDING_ORDERS", "PAY_SPECIFIC_ORDER", 
+    "UNKNOWN" 
   ]).describe("Identify the core intent based on user input and the previous bot message context."),
   
   user_name: z.string().nullable(),
@@ -44,12 +46,12 @@ const IntentSchema = z.object({
   category_name: z.string().nullable(),
   search_query: z.string().nullable(),
   item_name: z.string().nullable(),
-  quantity: z.number().nullable()
+  quantity: z.number().nullable(),
+  order_id: z.string().nullable() 
 });
 
 const aiBrain = llm.withStructuredOutput(IntentSchema, { strict: true });
 
-// 🔥 SMART ICONS FOR CATEGORIES
 function getCategoryIcon(catName) {
   const name = catName.toLowerCase();
   if (name.includes("starter")) return "🥟";
@@ -114,7 +116,6 @@ async function agentDecisionNode(state) {
     return { ...state, aiIntent: "PROVIDE_SHARED_LOCATION", aiData: { location: locationData } };
   }
 
-  // 🔥 FIX: New User Registration Logic Capture
   const isAskingName = previousBotMessage.includes("apna naam");
   if (isAskingName && msg.length > 0) {
     if (msg.includes("btn_") || msg.includes("skip")) {
@@ -131,6 +132,13 @@ async function agentDecisionNode(state) {
   if (isAskingAddress) {
     if (msg === "home" || msg.includes("home") || msg === "1") return { ...state, aiIntent: "SELECT_SAVED_ADDRESS", aiData: { address_index: 1 } };
     if (msg.includes("add new") || msg === "2" || msg === "3" || msg.includes("btn_new_address")) return { ...state, aiIntent: "PROMPT_NEW_ADDRESS", aiData: {} };
+  }
+
+  if (msg === "btn_pay_pending" || msg === "pay pending") {
+    return { ...state, aiIntent: "VIEW_PENDING_ORDERS", aiData: {} };
+  }
+  if (msg.startsWith("pay_ord_")) {
+    return { ...state, aiIntent: "PAY_SPECIFIC_ORDER", aiData: { order_id: rawMsg.replace("pay_ord_", "") } };
   }
 
   if (msg.startsWith("add_")) {
@@ -191,7 +199,6 @@ async function actionExecutionNode(state) {
   const { aiIntent, aiData, phone, inputText } = state;
   let user = await checkUserExists(phone);
 
-  // 🔥 FIX: Guest User Bypass so they aren't blocked from ordering
   if (!user && aiIntent !== "PROVIDE_NAME") {
     if (aiIntent === "SHOW_MENU" || inputText.toLowerCase().includes("skip") || inputText.toLowerCase().includes("btn_")) {
         user = await registerNewUser(phone, "Guest");
@@ -299,7 +306,6 @@ async function actionExecutionNode(state) {
       }
       break;
     }
-    // 🔥 FIX: Beautiful Category List with Icons
     case "SHOW_MENU": {
       const categories = await getAvailableCategoriesToday();
       if (!categories || categories.length === 0) { 
@@ -585,11 +591,13 @@ async function actionExecutionNode(state) {
       } else { replyText = "Payment link banane mein issue aaya. Kripya thodi der baad try karein."; }
       break;
     }
+
     case "TRACK_ORDER": {
       const activeOrders = await getActiveOrdersToday(user._id);
       
       if (activeOrders && activeOrders.length > 0) {
         replyText = `📦 *Aapke Aaj Ke Active Orders:*\n\n`;
+        let hasPending = false;
         let hasCancelable = false;
         
         activeOrders.forEach((order, index) => {
@@ -597,7 +605,15 @@ async function actionExecutionNode(state) {
             const amount = order.totalAmount || order.pricing?.total || 0;
             
             replyText += `*${index + 1}. Order ID:* ${order.orderNumber || order._id}\n`;
-            replyText += `📊 Status: *${orderStatus.toUpperCase()}*\n`;
+            
+            if (orderStatus === "pending" || order.paymentStatus === "pending") {
+                replyText += `⏳ Status: *PAYMENT PENDING*\n`;
+                replyText += `⚠️ Kripya ${order.expiresIn || 0} minute mein payment karein.\n`;
+                hasPending = true;
+            } else {
+                replyText += `📊 Status: *${orderStatus.toUpperCase()}*\n`;
+            }
+            
             replyText += `💰 Amount: ₹${amount.toFixed(2)}\n`;
             
             if (order.items && order.items.length > 0) {
@@ -605,10 +621,12 @@ async function actionExecutionNode(state) {
                replyText += `📝 Items: ${itemStr}\n`;
             }
 
-            if (["dispatched", "out_for_delivery"].includes(orderStatus) && order.deliveryBoy) { 
-              replyText += `🛵 Rider: ${order.deliveryBoy.name || "Executive"} (📞 ${order.deliveryBoy.phone})\n`; 
-            } else { 
-              replyText += `👨‍🍳 Humare chefs preparation kar rahe hain.\n`; 
+            if (orderStatus !== "pending" && order.paymentStatus !== "pending") {
+                if (["dispatched", "out_for_delivery"].includes(orderStatus) && order.deliveryBoy) { 
+                  replyText += `🛵 Rider: ${order.deliveryBoy.name || "Executive"} (📞 ${order.deliveryBoy.phone})\n`; 
+                } else { 
+                  replyText += `👨‍🍳 Humare chefs preparation kar rahe hain.\n`; 
+                }
             }
             replyText += `\n---\n\n`;
             
@@ -619,8 +637,11 @@ async function actionExecutionNode(state) {
         });
 
         let buttons = [{ type: "reply", reply: { id: "btn_add_more", title: "🍔 Aur Order Karein" } }];
-        if (hasCancelable) { 
-          buttons.push({ type: "reply", reply: { id: "btn_cancel_order", title: "❌ Cancel Order" } }); 
+        if (hasPending) {
+           buttons.push({ type: "reply", reply: { id: "btn_pay_pending", title: "💳 Pay Pending" } });
+        }
+        if (hasCancelable && buttons.length < 3) { 
+           buttons.push({ type: "reply", reply: { id: "btn_cancel_order", title: "❌ Cancel Order" } }); 
         }
         interactive = { type: "button", body: { text: replyText.trim() }, action: { buttons } };
       } else {
@@ -629,6 +650,62 @@ async function actionExecutionNode(state) {
       }
       break;
     }
+
+    // 🔥 FIX: 'undefined' Price Bug Resolution
+    case "VIEW_PENDING_ORDERS": {
+      const pendingOrders = await getPendingOrders(user._id);
+      
+      if (!pendingOrders || pendingOrders.length === 0) {
+        replyText = "Aapka koi pending order nahi hai jiska payment bacha ho.";
+        interactive = { type: "button", body: { text: replyText }, action: { buttons: [{ type: "reply", reply: { id: "btn_menu", title: "🍔 Menu" } }] } };
+      } else {
+        replyText = "Kripya select karein aap kis pending order ka payment karna chahte hain 👇";
+        
+        const rows = pendingOrders.slice(0, 10).map((ord, idx) => {
+            const itemsStr = ord.items.map(i => `${i.quantity}x ${i.name}`).join(", ");
+            // Fallback for old orders where totalAmount wasn't at the root
+            const ordAmount = ord.totalAmount || ord.pricing?.total || 0; 
+            return {
+                id: `pay_ord_${ord._id}`,
+                title: `Order ${idx + 1} - ₹${ordAmount}`, // Now it will correctly show the price
+                description: itemsStr.substring(0, 72)
+            };
+        });
+
+        interactive = {
+            type: "list",
+            header: { type: "text", text: "💳 Pending Payments" },
+            body: { text: replyText },
+            action: {
+                button: "🧾 Select Order",
+                sections: [{ title: "Pending Orders", rows: rows }]
+            }
+        };
+      }
+      break;
+    }
+
+    // 🔥 FIX: Check both totalAmount and pricing.total just in case
+    case "PAY_SPECIFIC_ORDER": {
+      const orderIdToPay = aiData?.order_id;
+      const paymentUrl = await getPaymentLinkByOrderId(orderIdToPay);
+      const orderDetails = await Order.findById(orderIdToPay).lean();
+
+      if (!paymentUrl || !orderDetails || orderDetails.status !== "pending") {
+          replyText = "Maaf kijiyega, yeh order expire ho chuka hai ya iska link invalid hai. Kripya naya order banayein.";
+          interactive = { type: "button", body: { text: replyText }, action: { buttons: [{ type: "reply", reply: { id: "btn_menu", title: "🍔 Menu" } }] } };
+      } else {
+          const ordAmount = orderDetails.totalAmount || orderDetails.pricing?.total || 0;
+          replyText = `🧾 *Order Payment*\n\nOrder ID: ${orderDetails.orderNumber || orderDetails._id}\nAmount: ₹${ordAmount}\n\nNeeche diye gaye link par click karke payment complete karein:`;
+          interactive = { 
+              type: "cta_url", 
+              body: { text: replyText }, 
+              action: { name: "cta_url", parameters: { display_text: `Pay ₹${ordAmount}`, url: paymentUrl } } 
+          };
+      }
+      break;
+    }
+
     case "CANCEL_ORDER": {
       const cancelledOrder = await cancelOrder(user._id);
       if (cancelledOrder) { 
@@ -641,11 +718,20 @@ async function actionExecutionNode(state) {
     }
     case "COMPLETE_ORDER": {
       const paymentCheck = await checkLatestPaymentStatus(user._id);
+      
+      if (paymentCheck.isRejected) {
+        paymentAttemptsMemory[phone] = 0; 
+        replyText = `❌ *Order Cancelled*\n\n5 minute ke andar payment nahi aayi isliye order cancel ho gaya hai.\nKripya Menu se naya order place karein.`;
+        interactive = { type: "button", body: { text: replyText }, action: { buttons: [{ type: "reply", reply: { id: "btn_menu", title: "🍔 Menu" } }] } };
+        break; 
+      }
+
       if (!paymentCheck.found) { 
         replyText = "Mujhe aapka koi pending order nahi mila.\nNaya order place karein."; 
         interactive = { type: "button", body: { text: replyText }, action: { buttons: [{ type: "reply", reply: { id: "btn_menu", title: "🍔 Menu" } }] } }; 
         break; 
       }
+
       if (paymentCheck.isPaid) {
         paymentAttemptsMemory[phone] = 0; 
         replyText = `🎉 *Payment Confirm Ho Gaya!*\n\nOrder ID: *${paymentCheck.orderNumber}*\n\nHumare chefs ne preparation start kar di hai! 👨‍🍳🔥`;
@@ -657,7 +743,17 @@ async function actionExecutionNode(state) {
           replyText = `❌ *Order Cancelled*\n\n3 attempts ke baad bhi payment receive nahi hua.\nSecurity reason se order cancel ho gaya hai.`;
           interactive = { type: "button", body: { text: replyText }, action: { buttons: [{ type: "reply", reply: { id: "btn_menu", title: "🍔 Menu" } }] } };
         } else {
-          replyText = `⚠️ *Payment Pending*\n\nAbhi tak payment system mein nahi aayi hai. *(Attempt ${attempts}/3)*\n\nKripya upar diye gaye link se pay karein, aur fir "paid" type karein.`;
+          replyText = `⚠️ *Payment Pending*\n\nAbhi tak payment system mein nahi aayi hai. *(Attempt ${attempts}/3)*\n\nKripya neeche button se pay karein, aur fir "paid" type karein.`;
+          
+          if (paymentCheck.paymentUrl) {
+            interactive = { 
+                type: "cta_url", 
+                body: { text: replyText }, 
+                action: { name: "cta_url", parameters: { display_text: `Pay ₹${(paymentCheck.totalAmount || 0).toFixed(2)}`, url: paymentCheck.paymentUrl } } 
+            };
+          } else {
+             interactive = { type: "button", body: { text: replyText }, action: { buttons: [{ type: "reply", reply: { id: "btn_menu", title: "🍔 Menu" } }] } };
+          }
         }
       }
       break;
@@ -671,7 +767,8 @@ async function actionExecutionNode(state) {
         recentOrders.forEach((o, i) => {
            const date = new Date(o.createdAt).toLocaleDateString("en-IN");
            const itemsStr = o.items.map(it => `${it.quantity}x ${it.name}`).join(", ");
-           replyText += `${i+1}. *${date}* - ₹${o.totalAmount.toFixed(2)} (${o.status.toUpperCase()})\n   📝 _${itemsStr}_\n\n`;
+           const ordAmt = o.totalAmount || o.pricing?.total || 0;
+           replyText += `${i+1}. *${date}* - ₹${ordAmt.toFixed(2)} (${o.status.toUpperCase()})\n   📝 _${itemsStr}_\n\n`;
         });
       } else { 
         replyText = "Aapne abhi tak koi order place nahi kiya hai."; 

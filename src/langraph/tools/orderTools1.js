@@ -107,7 +107,6 @@ async function registerNewUser(phone, fullName) { return await User.create({ pho
 async function getOrCreateSession(phone) { let session = await Session.findOne({ phone }); if (!session) session = await Session.create({ phone, cart: [] }); return session; }
 async function getActiveOrder(userId) { return await Order.findOne({ user: userId, status: { $nin: ["delivered", "cancelled"] } }).sort({ createdAt: -1 }).lean(); }
 
-// 🔥 NAYA FUNCTION: Aaj ke saare active orders nikalne ke liye
 async function getActiveOrdersToday(userId) {
   try {
     const today = new Date();
@@ -210,7 +209,7 @@ async function getTodayRosterItems() {
 
          return {
              _id: c._id,
-             name: `📦 ${c.name}`, 
+             name: `${c.name}`, 
              basePrice: finalPrice,
              originalPrice: originalPrice,
              category: "combos_virtual",
@@ -309,7 +308,6 @@ async function addItemsToCart(phone, items) {
     
     const itemToAdd = rosterItem;
 
-    // 🔥 FIX: Combo ke items ka naam bracket mein set karna (Cart aur DB dono ke liye)
     let finalName = itemToAdd.name;
     if (itemToAdd.isCombo && itemToAdd.includedItems) {
         finalName = `${itemToAdd.name} (${itemToAdd.includedItems})`;
@@ -367,10 +365,28 @@ async function placeOrder(phone, paymentMethod) {
   const orderNumber = `ORD-${Math.floor(100000 + Math.random() * 900000)}`;
   
   const newOrder = await Order.create({
+
     orderNumber, user: user._id, items: session.cart, 
     pricing: { subtotal, deliveryCharge, tax: 0, total }, 
     address: { fullName: user.fullName || "WhatsApp User", phone: phone, street: selectedAddress ? selectedAddress.street : "Store Pickup", landmark: selectedAddress ? selectedAddress.landmark : "", city: "Madhya Pradesh" },
     payment: { method: paymentMethod, status: paymentMethod === "ONLINE" ? "paid" : "pending" }, status: "pending",
+
+    orderNumber,
+    user: user._id,
+    items: session.cart,
+    pricing: { subtotal, tax, total },
+    address: {
+      fullName: "WhatsApp User",
+      phone: phone,
+      // 🔥 Yahan address ki details proper set honi chahiye
+      street: selectedAddress ? selectedAddress.street : "Store Pickup",
+      landmark: selectedAddress ? selectedAddress.landmark : "",
+      city: "Default City", 
+    },
+    payment: { method: paymentMethod, status: paymentMethod === "ONLINE" ? "paid" : "pending" },
+    status: "pending",
+    source: "whatsapp",
+
   });
   session.step = "HOME"; session.cart = []; session.addressId = null; await session.save();
   return newOrder;
