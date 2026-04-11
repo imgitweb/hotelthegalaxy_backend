@@ -105,18 +105,62 @@ async function verifyLocationByCoords(lat, lng) {
 async function checkUserExists(phone) { return await User.findOne({ phone }); }
 async function registerNewUser(phone, fullName) { return await User.create({ phone, role: "customer", fullName: fullName || "Guest", authProvider: "whatsapp", isActive: true }); }
 async function getOrCreateSession(phone) { let session = await Session.findOne({ phone }); if (!session) session = await Session.create({ phone, cart: [] }); return session; }
-async function getActiveOrder(userId) { return await Order.findOne({ user: userId, status: { $nin: ["delivered", "cancelled"] } }).sort({ createdAt: -1 }).lean(); }
+async function getActiveOrder(userId) { return await Order.findOne({ user: userId, status: { $nin: ["delivered", "cancelled", "rejected"] } }).sort({ createdAt: -1 }).lean(); }
 
 async function getActiveOrdersToday(userId) {
   try {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
-    return await Order.find({ 
+    const orders = await Order.find({ 
         user: userId, 
         createdAt: { $gte: today },
         status: { $nin: ["delivered", "cancelled", "rejected"] } 
     }).sort({ createdAt: -1 }).lean();
+
+    const validOrders = [];
+    const now = new Date();
+
+    for (let order of orders) {
+        if (order.status === "pending" || order.paymentStatus === "pending") {
+            const diffMins = (now - new Date(order.createdAt)) / (1000 * 60);
+            
+            if (diffMins > 5) {
+                await Order.findByIdAndUpdate(order._id, { status: "rejected", paymentStatus: "failed" });
+                continue; 
+            } else {
+                const payment = await Payment.findOne({ order: order._id }).lean();
+                if (payment && payment.metadata && payment.metadata.paymentUrl) {
+                    order.paymentUrl = payment.metadata.paymentUrl;
+                }
+                order.expiresIn = Math.ceil(5 - diffMins);
+            }
+        }
+        validOrders.push(order);
+    }
+    return validOrders;
   } catch (error) { return []; }
+}
+
+async function getPendingOrders(userId) {
+  try {
+    await getActiveOrdersToday(userId); 
+    const orders = await Order.find({ 
+        user: userId, 
+        status: "pending",
+        paymentStatus: "pending"
+    }).sort({ createdAt: -1 }).lean();
+    return orders;
+  } catch (error) { return []; }
+}
+
+async function getPaymentLinkByOrderId(orderId) {
+  try {
+    const payment = await Payment.findOne({ order: orderId }).lean();
+    if (payment && payment.metadata && payment.metadata.paymentUrl) {
+        return payment.metadata.paymentUrl;
+    }
+    return null;
+  } catch (error) { return null; }
 }
 
 async function getCategories() { 
@@ -362,31 +406,17 @@ async function placeOrder(phone, paymentMethod) {
   const setting = await Setting.findOne() || { baseFee: 30, freeDeliveryAbove: 500 }; 
   const deliveryCharge = subtotal >= setting.freeDeliveryAbove ? 0 : setting.baseFee;
   const total = subtotal + deliveryCharge; 
-  const orderNumber = `ORD-${Math.floor(100000 + Math.random() * 900000)}`;
+  
+  const phoneLast4 = phone ? String(phone).slice(-4) : "0000";
+  const orderCount = await Order.countDocuments({ user: user._id });
+  const sequence = String(orderCount + 1).padStart(4, '0');
+  const orderNumber = `ORD-WH-${phoneLast4}-${sequence}`;
   
   const newOrder = await Order.create({
-
-    orderNumber, user: user._id, items: session.cart, 
+    orderNumber: orderNumber, user: user._id, items: session.cart, 
     pricing: { subtotal, deliveryCharge, tax: 0, total }, 
     address: { fullName: user.fullName || "WhatsApp User", phone: phone, street: selectedAddress ? selectedAddress.street : "Store Pickup", landmark: selectedAddress ? selectedAddress.landmark : "", city: "Madhya Pradesh" },
     payment: { method: paymentMethod, status: paymentMethod === "ONLINE" ? "paid" : "pending" }, status: "pending",
-
-    orderNumber,
-    user: user._id,
-    items: session.cart,
-    pricing: { subtotal, tax, total },
-    address: {
-      fullName: "WhatsApp User",
-      phone: phone,
-      // 🔥 Yahan address ki details proper set honi chahiye
-      street: selectedAddress ? selectedAddress.street : "Store Pickup",
-      landmark: selectedAddress ? selectedAddress.landmark : "",
-      city: "Default City", 
-    },
-    payment: { method: paymentMethod, status: paymentMethod === "ONLINE" ? "paid" : "pending" },
-    status: "pending",
-    source: "whatsapp",
-
   });
   session.step = "HOME"; session.cart = []; session.addressId = null; await session.save();
   return newOrder;
@@ -437,22 +467,25 @@ async function processBotOrderAndPayment(userId, phone, cartItems, addressId, di
     deliveryCharge = Math.round(deliveryCharge);
     const totalAmount = subtotal + deliveryCharge;
 
-    const uniqueOrderNumber = "ORD-" + Date.now() + "-" + Math.floor(Math.random() * 1000);
+    const phoneLast4 = phone ? String(phone).slice(-4) : "0000";
+    const orderCount = await Order.countDocuments({ user: userId });
+    const sequence = String(orderCount + 1).padStart(4, '0');
+    const uniqueOrderNumber = `ORD-WH-${phoneLast4}-${sequence}`;
 
     const newOrder = new Order({
       orderNumber: uniqueOrderNumber, orderSource: "whatsapp", user: userId,
       items: cartItems.map(item => ({ menuItem: item.isCombo ? null : item.menuItemId, combo: item.isCombo ? item.menuItemId : null, name: item.name, price: item.price || (item.total / item.quantity), quantity: item.quantity, total: item.total })),
       address: { street: fullAddress.street || "Unknown", landmark: fullAddress.landmark || "", label: fullAddress.label || "Home", lat: fullAddress.lat || 0, lng: fullAddress.lng || 0 },
       pricing: { subtotal: subtotal, deliveryCharge: deliveryCharge, tax: 0, total: totalAmount }, 
-      totalAmount: totalAmount, noContact: false, paymentStatus: "pending", orderStatus: "confirmed",
+      totalAmount: totalAmount, noContact: false, paymentStatus: "pending", orderStatus: "pending",
       distanceKm: finalDistance, distance: finalDistance
     });
     
     const savedOrder = await newOrder.save();
     
-    const paymentLinkReq = { amount: Math.round(totalAmount * 100), currency: "INR", accept_partial: false, description: "Galaxy Hotel Feast Order", customer: { contact: phone }, notify: { sms: false, email: false }, reminder_enable: true, reference_id: savedOrder._id.toString(), notes: { dbOrderId: savedOrder._id.toString(), phone: phone } };
+    const paymentLinkReq = { amount: Math.round(totalAmount * 100), currency: "INR", accept_partial: false, description: "Hotel The Galaxy Order", customer: { contact: phone }, notify: { sms: false, email: false }, reminder_enable: true, reference_id: savedOrder._id.toString(), notes: { dbOrderId: savedOrder._id.toString(), phone: phone } };
     const paymentLink = await razorpay.paymentLink.create(paymentLinkReq);
-    await Payment.create({ order: savedOrder._id, amount: totalAmount, gateway: "RAZORPAY", status: "created", metadata: { razorpayOrderId: paymentLink.id, userId: userId } });
+    await Payment.create({ order: savedOrder._id, amount: totalAmount, gateway: "RAZORPAY", status: "created", metadata: { razorpayOrderId: paymentLink.id, userId: userId, paymentUrl: paymentLink.short_url } });
     
     return { success: true, orderId: savedOrder._id, paymentUrl: paymentLink.short_url, totalAmount, subtotal, deliveryCharge };
   } catch (error) { return { success: false }; }
@@ -462,8 +495,24 @@ async function checkLatestPaymentStatus(userId) {
   try {
     const order = await Order.findOne({ user: userId }).sort({ createdAt: -1 }); if (!order) return { found: false };
     const payment = await Payment.findOne({ order: order._id }); if (!payment) return { found: true, isPaid: false };
+    
     const isPaid = payment.status === "SUCCESS" || payment.isCaptured === true;
-    return { found: true, isPaid: isPaid, orderNumber: order.orderNumber || order._id, orderId: order._id };
+    
+    if (!isPaid && (order.status === "pending" || order.paymentStatus === "pending")) {
+        const diffMins = (new Date() - new Date(order.createdAt)) / (1000 * 60);
+        if (diffMins > 5) {
+            await Order.findByIdAndUpdate(order._id, { status: "rejected", paymentStatus: "failed" });
+            return { found: true, isPaid: false, isRejected: true };
+        }
+    }
+
+    if (isPaid && order.status === "pending") {
+        await Order.findByIdAndUpdate(order._id, { status: "confirmed", paymentStatus: "paid" });
+    }
+    
+    const paymentUrl = payment.metadata ? payment.metadata.paymentUrl : null;
+
+    return { found: true, isPaid: isPaid, isRejected: false, orderNumber: order.orderNumber || order._id, orderId: order._id, paymentUrl, totalAmount: order.totalAmount };
   } catch (error) { return { found: false }; }
 }
 
@@ -486,7 +535,7 @@ async function getActiveOffers() {
 }
 
 module.exports = {
-  checkUserExists, registerNewUser, getOrCreateSession, getActiveOrder, getActiveOrdersToday, getActiveOffers,
+  checkUserExists, registerNewUser, getOrCreateSession, getActiveOrder, getActiveOrdersToday, getPendingOrders, getPaymentLinkByOrderId, getActiveOffers,
   getCategories, getMenuByCategory, getUserAddresses, getUserOrderStats, getTodayRosterItems, 
   searchTodayRosterItems, getAvailableCategoriesToday, saveNewAddress, addItemsToCart, 
   placeOrder, cancelOrder, removeItemsFromCart, processBotOrderAndPayment, 
