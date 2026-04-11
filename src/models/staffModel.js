@@ -68,6 +68,7 @@ const staffSchema = new mongoose.Schema(
       default: false,
     },
     
+    password: { type: String, select: false },
 
     // 🔹 OTP
     otp: {
