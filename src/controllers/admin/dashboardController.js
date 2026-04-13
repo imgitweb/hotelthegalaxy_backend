@@ -5,6 +5,70 @@ const VALID_ORDER_FILTER = {
   status: { $ne: "cancelled" },
 };
 
+// exports.getDashboardStats = async (req, res, next) => {
+//   try {
+//     const today = new Date();
+//     today.setHours(0, 0, 0, 0);
+
+//     const week = new Date();
+//     week.setDate(week.getDate() - 7);
+
+//     const month = new Date();
+//     month.setDate(1);
+//     month.setHours(0, 0, 0, 0);
+
+//     const totalOrders = await Order.countDocuments(VALID_ORDER_FILTER);
+
+//     const todayOrders = await Order.countDocuments({
+//       ...VALID_ORDER_FILTER,
+//       createdAt: { $gte: today },
+//     });
+
+//     const weeklyOrders = await Order.countDocuments({
+//       ...VALID_ORDER_FILTER,
+//       createdAt: { $gte: week },
+//     });
+
+//     const monthlyOrders = await Order.countDocuments({
+//       ...VALID_ORDER_FILTER,
+//       createdAt: { $gte: month },
+//     });
+
+//   const revenue = await Order.aggregate([
+//   {
+//     $match: {
+//       status: { $ne: "cancelled" },
+//       "payment.status": "paid",
+//     },
+//   },
+
+//   { $unwind: "$items" },
+
+//   {
+//     $group: {
+//       _id: null,
+//       totalRevenue: { $sum: "$items.total" },
+//     },
+//   },
+// ]);
+
+//     res.json({
+//       success: true,
+//       data: {
+//         totalOrders,
+//         todayOrders,
+//         weeklyOrders,
+//         monthlyOrders,
+//         totalRevenue: revenue[0]?.totalRevenue || 0,
+//       },
+//     });
+//   } catch (err) {
+//     next(err);
+//   }
+// };
+
+
+
 exports.getDashboardStats = async (req, res, next) => {
   try {
     const today = new Date();
@@ -18,6 +82,10 @@ exports.getDashboardStats = async (req, res, next) => {
     month.setHours(0, 0, 0, 0);
 
     const totalOrders = await Order.countDocuments(VALID_ORDER_FILTER);
+
+    const pendingOrders = await Order.countDocuments({
+      status: "pending",
+    });
 
     const todayOrders = await Order.countDocuments({
       ...VALID_ORDER_FILTER,
@@ -34,28 +102,27 @@ exports.getDashboardStats = async (req, res, next) => {
       createdAt: { $gte: month },
     });
 
-  const revenue = await Order.aggregate([
-  {
-    $match: {
-      status: { $ne: "cancelled" },
-      "payment.status": "paid",
-    },
-  },
-
-  { $unwind: "$items" },
-
-  {
-    $group: {
-      _id: null,
-      totalRevenue: { $sum: "$items.total" },
-    },
-  },
-]);
+    const revenue = await Order.aggregate([
+      {
+        $match: {
+          status: { $ne: "cancelled" },
+          "payment.status": "paid",
+        },
+      },
+      { $unwind: "$items" },
+      {
+        $group: {
+          _id: null,
+          totalRevenue: { $sum: "$items.total" },
+        },
+      },
+    ]);
 
     res.json({
       success: true,
       data: {
         totalOrders,
+        pendingOrders, // ✅ NEW FIELD
         todayOrders,
         weeklyOrders,
         monthlyOrders,
@@ -66,8 +133,6 @@ exports.getDashboardStats = async (req, res, next) => {
     next(err);
   }
 };
-
-
 
 exports.getCategorySales = async (req, res, next) => {
   try {
