@@ -1,5 +1,6 @@
 require("dotenv").config(); 
 const razorpay = require("../config/razorpay");
+const User = require('../models/User');
 const crypto = require("crypto");
 const Order = require("../models/User/ordersModel");
 const Payment = require("../models/paymentModel");
@@ -7,6 +8,9 @@ const Address = require("../models/User/address");
 const {sendTextMessage , sendInteractiveMessage } = require("../langraph/services/whatsappService")
 const { generateOTP, hashOTP } = require("../utils/otp");
 const { sendAuthTemplate } = require("../utils/whatsaap/sendAuthTemplate");
+
+// Dhyan dein: Agar User model imported nahi hai, toh is file ke top par import zaroor kar lein.
+// const User = require('../models/User'); // Example import
 
 exports.createOrder = async (req, res, next) => {
   try {
@@ -42,14 +46,40 @@ exports.createOrder = async (req, res, next) => {
         message: "Invalid total amount",
       });
     }
- 
+
+    // 1. User fetch karein mobile number ke liye
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found",
+      });
+    }
+
+    // Last 4 digits extract karna
+    const mobileString = (user.phone || user.mobile || "0000").toString();
+    const lastFourDigits = mobileString.slice(-4).padStart(4, "0");
+
+    // 2. Sirf IS USER ke WEB orders count karna
+    // $regex: '^ORD-Web-' ensure karta hai ki agar usne WhatsApp se order kiya ho to wo isme count na ho
+    const userWebOrderCount = await Order.countDocuments({
+      user: userId,
+      orderNumber: { $regex: '^ORD-Web-' } 
+    });
+    
+    // User ke order count mein +1 karke 4 digits ka sequence banana
+    const sequenceNumber = (userWebOrderCount + 1).toString().padStart(4, "0");
+
+    // 3. Final Order Number banana
+    const generatedOrderNumber = `ORD-Web-${lastFourDigits}-${sequenceNumber}`;
+
     const updatedItems = items.map((item) => ({
       ...item,
       total: item.price * item.quantity,
     }));
- 
+
     const newOrder = new Order({
-      orderNumber: "ORD-" + Date.now(),
+      orderNumber: generatedOrderNumber, // "ORD-Web-5563-0001" format
       user: userId,
       items: updatedItems,
       address: {
@@ -70,7 +100,7 @@ exports.createOrder = async (req, res, next) => {
     });
 
     const savedOrder = await newOrder.save();
- 
+
     let razorpayOrder;
     try {
       razorpayOrder = await razorpay.orders.create({

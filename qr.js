@@ -1,9 +1,9 @@
 const QRCode = require("qrcode");
 const fs = require("fs");
 
-const data = "qwertyuioplkjhgfdsa1234567890"; // tera ID
+const data = "https://www.goodwilledu.in/"; // tera ID
 
-const filePath = "./qr-code.png";
+const filePath = "./qr-web-code.png";
 
 QRCode.toFile(filePath, data, {
   color: {
