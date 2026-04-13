@@ -40,6 +40,7 @@ const roomRoutes = require("./routes/roomRoutes");
 const staffAttendance = require("./routes/staffAuthRoutes")
 const adminSettingRoutes = require("./routes/adminSettingRoutes")
 const attendanceRoutes = require("./routes/attendanceRoutes");
+const deliverySettingRoutes = require("./routes/admin/deliverySettingRoutes")
 const path = require("path");
 const router = require("express").Router();
 const app = express();
@@ -142,6 +143,7 @@ app.use("/api/v1/payment" ,paymentRoutes);
 app.use("/api/v1/rooms", roomRoutes);
 app.use("/api/v1/staffAttendance",staffAttendance);
 app.use("/api/v1/admin/staff", staffRoutes);
+app.use("/api/v1/settings", deliverySettingRoutes)
 // Yeh add karo 👇
 
 app.use("/api/v1/admin/attendance", attendanceRoutes);

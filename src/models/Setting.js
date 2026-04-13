@@ -1,41 +1,15 @@
 const mongoose = require("mongoose");
 
-const settingSchema = new mongoose.Schema(
+const deliverySettingSchema = new mongoose.Schema(
   {
-    baseFee: 
-    { 
-        type: Number,
-         default: 30
-     },
-     
-     perKmRate: {
-      type: Number,
-      default: 10, // base distance ke baad per km charge
-    },
-
-    baseDistanceKm: {
-      type: Number,
-      default: 5, // base fee kitne km tak valid hai
-    },
-
-   
-    minCharge: 
-    { 
-        type: Number, 
-        default: 20 
-    },
-    maxCharge: 
-    { 
-        type: Number,
-         default: 200
-         },
-    freeDeliveryAbove:
-     { 
-        type: Number, 
-        default: 500
-     },
+    baseFee: { type: Number, required: true, default: 30 },
+    baseDistance: { type: Number, required: true, default: 3 }, // Naya field (e.g., up to 3 KM)
+    perKmRate: { type: Number, required: true, default: 10 },
+    minCharge: { type: Number, required: true, default: 20 },
+    maxCharge: { type: Number, required: true, default: 200 },
+    freeDeliveryAbove: { type: Number, required: true, default: 500 },
   },
-  { timestamps: true },
+  { timestamps: true }
 );
 
-module.exports = mongoose.model("Setting", settingSchema);
+module.exports = mongoose.model("DeliverySetting", deliverySettingSchema);
