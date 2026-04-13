@@ -49,7 +49,7 @@ exports.createOrder = async (req, res, next) => {
     }));
  
     const newOrder = new Order({
-      orderNumber: "ORD-" + Date.now(),
+      orderNumber: "ORD-" + "web" + "",
       user: userId,
       items: updatedItems,
       address: {
