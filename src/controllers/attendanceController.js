@@ -98,10 +98,11 @@ exports.markAttendance = async (req, res) => {
   try {
     // 1. Get role from the frontend request (defaulting to 'staff')
     const { qrData, lat, lng, deviceId, role = "staff" } = req.body;
+    console.log(req.body)
 
     // 2. Safely extract the User ID
     // (req.riderId comes from Rider JWT, req.staff?.id comes from Staff JWT)
-    const userId = req.riderId || req.user?.id || req.staff?.id || req.user?._id;
+    const userId = req.riderId || req.user?.id || req.staff?.id || req.user?._id || req.user?.riderId
 
     if (!userId) {
       return res.status(401).json({ success: false, message: "Unauthorized" });
@@ -497,7 +498,8 @@ exports.getMonthly = async (req, res) => {
 // ==========================================
 exports.getMyAttendanceStats = async (req, res) => {
   try {
-    const staffId = req.user?.id || req.staff?.id || req.user?._id; 
+    console.log("..................",req.user)
+    const staffId = req.user?.id || req.staff?.id || req.user?._id || req.user?.riderId
     const { month } = req.query; // Format expected: "YYYY-MM"
 
     if (!staffId) {
