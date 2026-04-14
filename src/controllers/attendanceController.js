@@ -78,7 +78,8 @@
 
 // ─── controllers/attendanceController.js ─────────────────────────────────────
 const { attendance } = require("../models/attendance");
-const Staff          = require("../models/staffModel");
+const Staff  = require("../models/staffModel");
+const Rider  = require("../models/rider.model"); // Fixed capitalization convention
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 const todayStr = () => new Date().toLocaleDateString("en-CA"); // YYYY-MM-DD
@@ -92,38 +93,61 @@ const isLate = (date) => {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // POST /api/attendance/mark-attendance
-// (existing controller, updated with Late logic + checkout)
 // ─────────────────────────────────────────────────────────────────────────────
 exports.markAttendance = async (req, res) => {
   try {
-    const { qrData, lat, lng, deviceId } = req.body;
-    const staffId = req.user?.id || req.staff?.id || req.user?._id;
+    // 1. Get role from the frontend request (defaulting to 'staff')
+    const { qrData, lat, lng, deviceId, role = "staff" } = req.body;
 
-    if (!staffId)   return res.status(401).json({ message: "Unauthorized" });
-    if (!req.file)  return res.status(400).json({ message: "Photo is required" });
+    // 2. Safely extract the User ID
+    // (req.riderId comes from Rider JWT, req.staff?.id comes from Staff JWT)
+    const userId = req.riderId || req.user?.id || req.staff?.id || req.user?._id;
 
-    if (qrData !== process.env.QR_ID)
-      return res.status(400).json({ message: "Invalid QR Code" });
+    if (!userId) {
+      return res.status(401).json({ success: false, message: "Unauthorized" });
+    }
+    if (!req.file) {
+      return res.status(400).json({ success: false, message: "Photo is required" });
+    }
+    if (qrData !== process.env.QR_ID) {
+      return res.status(400).json({ success: false, message: "Invalid QR Code" });
+    }
 
-    const photoUrl   = `/uploads/staff/${req.file.filename}`;
-    const now        = new Date();
+    // 3. Determine actual user type
+    const isRider = !!req.riderId || role.toLowerCase() === "rider";
+
+    // Set upload path dynamically based on role
+    const folder = isRider ? "rider" : "staff";
+    const photoUrl = `/uploads/${folder}/${req.file.filename}`;
+    
+    const now = new Date();
     const dateString = now.toLocaleDateString("en-CA");
-    const status     = isLate(now) ? "Late" : "Present";
+    const status = isLate(now) ? "Late" : "Present";
 
+    // 4. Create the Attendance Document
     const newAttendance = new attendance({
-      staffId,
-      date:        dateString,
+      staffId: userId, // Keeping your existing field name to prevent breaking the schema
+      role: isRider ? "Rider" : "Staff", // Saving role to DB
+      date: dateString,
       checkInTime: now,
-      location:    { lat: parseFloat(lat), lng: parseFloat(lng) },
-      photo:       photoUrl,
-      deviceId:    deviceId || "unknown",
-      status,
+      location: { lat: parseFloat(lat), lng: parseFloat(lng) },
+      photo: photoUrl,
+      deviceId: deviceId || "unknown",
+      status, // "Present" or "Late"
     });
 
     await newAttendance.save();
 
-    // update staff's lastAttendanceAt
-    await Staff.findByIdAndUpdate(staffId, { lastAttendanceAt: now });
+    // 5. Update the correct User Collection based on Role
+    if (isRider) {
+      // 👇 YAHAN CHANGE KIYA HAI: Rider ko 'Available' mark kar diya
+      await Rider.findByIdAndUpdate(userId, { 
+        lastAttendanceAt: now,
+        status: "Available" 
+      });
+    } else {
+      await Staff.findByIdAndUpdate(userId, { lastAttendanceAt: now });
+    }
 
     return res.status(200).json({
       success: true,
@@ -131,10 +155,74 @@ exports.markAttendance = async (req, res) => {
       data: newAttendance,
     });
   } catch (error) {
-    if (error.code === 11000)
-      return res.status(400).json({ success: false, message: "Attendance already marked for today!" });
+    // Handle Duplicate Key Error (Unique compound index on staffId + date)
+    if (error.code === 11000) {
+      return res.status(400).json({ 
+        success: false, 
+        message: "Attendance already marked for today!" 
+      });
+    }
 
     console.error("markAttendance error:", error);
+    return res.status(500).json({ success: false, message: "Internal Server Error" });
+  }
+};
+
+exports.toggleRiderStatus = async (req, res) => {
+  try {
+    const { status } = req.body; // Expects "Available" or "Offline"
+    const riderId = req.riderId; // From auth middleware
+
+    if (!["Available", "Offline"].includes(status)) {
+      return res.status(400).json({ success: false, message: "Invalid status" });
+    }
+
+    await Rider.findByIdAndUpdate(riderId, { status });
+
+    res.json({
+      success: true,
+      message: `Duty status changed to ${status}`,
+      status
+    });
+  } catch (error) {
+    console.error("Toggle Status Error:", error);
+    res.status(500).json({ success: false, message: "Server Error" });
+  }
+};
+
+// 2. Checkout Attendance (End of Day)
+exports.checkoutAttendance = async (req, res) => {
+  try {
+    const userId = req.riderId;
+    const todayStr = new Date().toLocaleDateString("en-CA");
+
+    // Aaj ki attendance record find karein
+    const todayAttendance = await attendance.findOne({
+      staffId: userId,
+      date: todayStr,
+    });
+
+    if (!todayAttendance) {
+      return res.status(404).json({ success: false, message: "Attendance not found for today." });
+    }
+    if (todayAttendance.checkOutTime) {
+      return res.status(400).json({ success: false, message: "Already checked out." });
+    }
+
+    // Mark check-out time
+    todayAttendance.checkOutTime = new Date();
+    await todayAttendance.save();
+
+    // Rider ko force Offline mark karein
+    await Rider.findByIdAndUpdate(userId, { status: "Offline" });
+
+    return res.status(200).json({
+      success: true,
+      message: "Shift ended successfully.",
+      data: todayAttendance,
+    });
+  } catch (error) {
+    console.error("checkoutAttendance error:", error);
     return res.status(500).json({ success: false, message: "Internal Server Error" });
   }
 };

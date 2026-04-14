@@ -64,6 +64,12 @@ const attendanceSchema = new mongoose.Schema(
       required: true,
     },
 
+    role: {
+    type: String,
+    enum: ["Staff", "Rider"],
+    default: "Staff"
+  },
+
     // "YYYY-MM-DD" — ensures one record per staff per day (via unique index below)
     date: {
       type:     String,

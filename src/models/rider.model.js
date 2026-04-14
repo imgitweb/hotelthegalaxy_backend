@@ -14,22 +14,31 @@ const riderSchema = new mongoose.Schema(
     },
     vehicleNumber: {
       type: String,
-      required: true, 
+      required: true,
     },
     password: {
       type: String,
       required: true,
     },
+    // ADDED: Track if password was set by user or is just a temporary hash
+    isPasswordSet: {
+      type: Boolean,
+      default: false,
+    },
     status: {
       type: String,
       enum: ["Available", "On-Trip", "Offline"],
-      default: "Available",
+      default: "Offline",
     },
-
+    role: {
+      type: String,
+      enum: ["RIDER"],
+      default: "RIDER",
+    },
     currentTripId: {
       type: mongoose.Schema.Types.ObjectId,
-      ref: "Trip", 
-      default: null
+      ref: "Trip",
+      default: null,
     },
     isActive: {
       type: Boolean,

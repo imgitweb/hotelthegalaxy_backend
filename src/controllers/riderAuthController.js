@@ -2,7 +2,9 @@ const Rider = require("../models/rider.model");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const { generateOTP, hashOTP } = require("../utils/otp");
-const { sendOTP } = require("../services/smsService");
+// Ensure these paths match your project exactly
+// const { sendOTP } = require("../services/smsService"); 
+const { sendAuthTemplate } = require("../utils/whatsaap/sendAuthTemplate");
 
 const generatePassword = () => {
   return Math.random().toString(36).slice(-8);
@@ -12,6 +14,37 @@ const MAX_OTP_REQUESTS = Number(process.env.OTP_MAX_REQUESTS_PER_HOUR) || 5;
 const OTP_COOLDOWN = Number(process.env.OTP_RESEND_COOLDOWN_SECONDS || 60) * 1000;
 const OTP_EXPIRY = Number(process.env.OTP_EXPIRY_MINUTES || 5) * 60 * 1000;
 const ONE_HOUR = 60 * 60 * 1000;
+
+// NEW: Check if rider exists and if password is set
+exports.checkRiderStatus = async (req, res, next) => {
+  try {
+    const { phone } = req.body;
+    const rider = await Rider.findOne({ phone });
+
+    if (!rider) {
+      return res.status(404).json({
+        success: false,
+        message: "Rider not found. Please contact admin.",
+      });
+    }
+
+    if (!rider.isActive) {
+      return res.status(403).json({
+        success: false,
+        message: "Account is deactivated",
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      data: {
+        isPasswordSet: rider.isPasswordSet,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
 
 exports.registerRider = async (req, res, next) => {
   try {
@@ -33,10 +66,8 @@ exports.registerRider = async (req, res, next) => {
       phone,
       vehicleNumber,
       password: hashedPassword,
+      isPasswordSet: false, // Explicitly mark as false
     });
-
-    // TODO: Send SMS/WhatsApp with temp password
-    // await sendSMS(phone, `Your temporary password is: ${tempPassword}`);
 
     res.status(201).json({
       success: true,
@@ -49,7 +80,7 @@ exports.registerRider = async (req, res, next) => {
           vehicleNumber: rider.vehicleNumber,
           status: rider.status,
         },
-        tempPassword, 
+        tempPassword,
       },
     });
   } catch (error) {
@@ -60,8 +91,7 @@ exports.registerRider = async (req, res, next) => {
 exports.requestOtp = async (req, res, next) => {
   try {
     const { phone } = req.body;
-    console.log("🏍️ Rider OTP request for phone:", phone);
-
+    
     if (!phone) {
       return res.status(400).json({
         success: false,
@@ -70,30 +100,20 @@ exports.requestOtp = async (req, res, next) => {
     }
 
     const rider = await Rider.findOne({ phone }).select(
-      "+password +otp +otpExpiresAt +otpLastRequestedAt +otpRequestCount +otpRequestWindowStartedAt",
+      "+password +otp +otpExpiresAt +otpLastRequestedAt +otpRequestCount +otpRequestWindowStartedAt"
     );
 
     if (!rider) {
-      return res.status(404).json({
-        success: false,
-        message: "Rider not found. Please register first.",
-      });
+      return res.status(404).json({ success: false, message: "Rider not found." });
     }
-
     if (!rider.isActive) {
-      return res.status(403).json({
-        success: false,
-        message: "Account is deactivated",
-      });
+      return res.status(403).json({ success: false, message: "Account is deactivated" });
     }
 
     const now = Date.now();
 
     if (rider.otpLastRequestedAt && now - rider.otpLastRequestedAt.getTime() < OTP_COOLDOWN) {
-      return res.status(429).json({
-        success: false,
-        message: "Please wait before requesting OTP again",
-      });
+      return res.status(429).json({ success: false, message: "Please wait before requesting OTP again" });
     }
 
     if (!rider.otpRequestWindowStartedAt || now - rider.otpRequestWindowStartedAt.getTime() > ONE_HOUR) {
@@ -102,16 +122,13 @@ exports.requestOtp = async (req, res, next) => {
     }
 
     if (rider.otpRequestCount >= MAX_OTP_REQUESTS) {
-      return res.status(429).json({
-        success: false,
-        message: "Too many OTP requests. Try again later.",
-      });
+      return res.status(429).json({ success: false, message: "Too many OTP requests. Try again later." });
     }
 
     const otp = generateOTP();
     const hashed = hashOTP(otp);
 
-    const updatedRider = await Rider.findByIdAndUpdate(
+    await Rider.findByIdAndUpdate(
       rider._id,
       {
         otp: hashed,
@@ -120,28 +137,17 @@ exports.requestOtp = async (req, res, next) => {
         otpRequestCount: (rider.otpRequestCount || 0) + 1,
         otpRequestWindowStartedAt: rider.otpRequestWindowStartedAt,
       },
-      {
-        new: true,
-        runValidators: false,
-      },
+      { new: true, runValidators: false }
     );
 
-    if (!updatedRider) {
-      return res.status(500).json({
-        success: false,
-        message: "Failed to update OTP data",
-      });
-    }
-
-    const smsResult = await sendOTP(phone, otp);
+    const smsResult = await sendAuthTemplate(phone, otp);
 
     return res.status(200).json({
       success: true,
       message: "OTP sent successfully",
-      ...(smsResult.bypass ? { otp } : {}),
+      ...(smsResult && smsResult.bypass ? { otp } : {}),
     });
   } catch (error) {
-    console.error("REQUEST OTP ERROR:", error);
     next(error);
   }
 };
@@ -149,61 +155,34 @@ exports.requestOtp = async (req, res, next) => {
 exports.verifyOtp = async (req, res, next) => {
   try {
     const { phone, otp } = req.body;
-    console.log("🏍️ Rider OTP verification for phone:", phone);
 
     if (!phone || !otp) {
-      return res.status(400).json({
-        success: false,
-        message: "Phone and OTP are required",
-      });
+      return res.status(400).json({ success: false, message: "Phone and OTP are required" });
     }
 
-    const rider = await Rider.findOne({ phone }).select(
-      "+password +otp +otpExpiresAt +otpAttempts",
-    );
+    const rider = await Rider.findOne({ phone }).select("+password +otp +otpExpiresAt +otpAttempts");
 
     if (!rider) {
-      return res.status(404).json({
-        success: false,
-        message: "Rider not found",
-      });
+      return res.status(404).json({ success: false, message: "Rider not found" });
     }
-
     if (!rider.isActive) {
-      return res.status(403).json({
-        success: false,
-        message: "Account is deactivated",
-      });
+      return res.status(403).json({ success: false, message: "Account is deactivated" });
     }
-
     if (!rider.otp || !rider.otpExpiresAt || rider.otpExpiresAt < new Date()) {
-      return res.status(400).json({
-        success: false,
-        message: "OTP expired or invalid. Request a new one.",
-      });
+      return res.status(400).json({ success: false, message: "OTP expired or invalid." });
     }
-
     if ((rider.otpAttempts || 0) >= 10) {
-      return res.status(429).json({
-        success: false,
-        message: "Too many OTP attempts. Request a fresh OTP.",
-      });
+      return res.status(429).json({ success: false, message: "Too many OTP attempts." });
     }
 
     const hashedOtp = hashOTP(otp);
     if (hashedOtp !== rider.otp) {
       await Rider.findByIdAndUpdate(
         rider._id,
-        {
-          otpAttempts: (rider.otpAttempts || 0) + 1,
-        },
-        { runValidators: false },
+        { otpAttempts: (rider.otpAttempts || 0) + 1 },
+        { runValidators: false }
       );
-
-      return res.status(401).json({
-        success: false,
-        message: "Invalid OTP",
-      });
+      return res.status(401).json({ success: false, message: "Invalid OTP" });
     }
 
     await Rider.findByIdAndUpdate(
@@ -216,16 +195,14 @@ exports.verifyOtp = async (req, res, next) => {
         otpLastRequestedAt: undefined,
         otpRequestWindowStartedAt: undefined,
       },
-      { runValidators: false },
+      { runValidators: false }
     );
 
     const token = jwt.sign(
       { riderId: rider._id, role: "rider" },
       process.env.JWT_ACCESS_SECRET || process.env.JWT_SECRET || "your-secret-key",
-      { expiresIn: "7d" },
+      { expiresIn: "7d" }
     );
-
-    console.log("🏍️ Rider JWT generated with payload:", { riderId: rider._id, role: "rider" });
 
     return res.status(200).json({
       success: true,
@@ -238,12 +215,12 @@ exports.verifyOtp = async (req, res, next) => {
           vehicleNumber: rider.vehicleNumber,
           status: rider.status,
           currentTripId: rider.currentTripId,
+          isPasswordSet: rider.isPasswordSet, // Let frontend know if password setup is needed
         },
         token,
       },
     });
   } catch (error) {
-    console.error("VERIFY OTP ERROR:", error);
     next(error);
   }
 };
@@ -253,27 +230,11 @@ exports.loginRider = async (req, res, next) => {
     const { phone, password } = req.body;
 
     const rider = await Rider.findOne({ phone });
-    if (!rider) {
-      return res.status(401).json({
-        success: false,
-        message: "Invalid phone number or password",
-      });
-    }
-
-    if (!rider.isActive) {
-      return res.status(401).json({
-        success: false,
-        message: "Account is deactivated",
-      });
-    }
+    if (!rider) return res.status(401).json({ success: false, message: "Invalid credentials" });
+    if (!rider.isActive) return res.status(401).json({ success: false, message: "Account is deactivated" });
 
     const isPasswordValid = await bcrypt.compare(password, rider.password);
-    if (!isPasswordValid) {
-      return res.status(401).json({
-        success: false,
-        message: "Invalid phone number or password",
-      });
-    }
+    if (!isPasswordValid) return res.status(401).json({ success: false, message: "Invalid credentials" });
 
     const token = jwt.sign(
       { riderId: rider._id, role: "rider" },
@@ -292,6 +253,7 @@ exports.loginRider = async (req, res, next) => {
           vehicleNumber: rider.vehicleNumber,
           status: rider.status,
           currentTripId: rider.currentTripId,
+          isPasswordSet: rider.isPasswordSet,
         },
         token,
       },
@@ -301,21 +263,37 @@ exports.loginRider = async (req, res, next) => {
   }
 };
 
-exports.getRiderProfile = async (req, res, next) => {
+// NEW: Update password after OTP verification (requires authentication middleware)
+exports.updatePassword = async (req, res, next) => {
   try {
-    const rider = await Rider.findById(req.riderId).select("-password");
-
-    if (!rider) {
-      return res.status(404).json({
-        success: false,
-        message: "Rider not found",
-      });
+    // req.riderId comes from your JWT auth middleware
+    const { newPassword } = req.body;
+    
+    if (!newPassword || newPassword.length < 6) {
+      return res.status(400).json({ success: false, message: "Password must be at least 6 characters" });
     }
+
+    const hashedPassword = await bcrypt.hash(newPassword, 12);
+    
+    await Rider.findByIdAndUpdate(req.riderId, {
+      password: hashedPassword,
+      isPasswordSet: true
+    });
 
     res.json({
       success: true,
-      data: rider,
+      message: "Password set successfully"
     });
+  } catch (error) {
+    next(error);
+  }
+};
+
+exports.getRiderProfile = async (req, res, next) => {
+  try {
+    const rider = await Rider.findById(req.riderId).select("-password");
+    if (!rider) return res.status(404).json({ success: false, message: "Rider not found" });
+    res.json({ success: true, data: rider });
   } catch (error) {
     next(error);
   }
@@ -323,10 +301,7 @@ exports.getRiderProfile = async (req, res, next) => {
 
 exports.logoutRider = async (req, res, next) => {
   try {
-    res.json({
-      success: true,
-      message: "Logged out successfully",
-    });
+    res.json({ success: true, message: "Logged out successfully" });
   } catch (error) {
     next(error);
   }

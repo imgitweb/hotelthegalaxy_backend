@@ -31,7 +31,10 @@ const upload = multer({ storage: storage });
 router.post("/check-status", controller.checkStaffStatus); // Naya: Check if password exists
 router.post("/login-password", controller.loginWithPassword); // Naya: Login with password
 router.post("/send-otp", controller.sendOtp);
-router.post("/verify-otp-set-password", controller.verifyOtpAndSetPassword); // Naya: Set password
+router.post("/verify-otp-set-password", controller.verifyOtpAndSetPassword);
+router.patch("/status", attendanceController.toggleRiderStatus)
+
+router.post("/attendance/checkout", attendanceController.checkoutAttendance) // Naya: Set password
 
 // ==========================================
 // ATTENDANCE ROUTE

@@ -30,6 +30,7 @@
     "express-validator": "^7.3.1",
     "fs": "^0.0.1-security",
     "helmet": "^8.1.0",
+    "http": "^0.0.1-security",
     "http-errors": "~1.6.3",
     "ioredis": "^5.9.3",
     "jade": "~1.11.0",
@@ -48,6 +49,7 @@
     "twilio": "^5.13.0",
     "uuid": "^13.0.0",
     "winston": "^3.19.0",
+    "ws": "^8.20.0",
     "xss-clean": "^0.1.4",
     "zod": "^4.3.6"
   },

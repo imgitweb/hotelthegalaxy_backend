@@ -41,6 +41,7 @@ const {
   getStats,
   getWeekly,
   getMonthly,
+  
 } = require("../controllers/attendanceController");
 
 // ─── import your auth middlewares ─────────────────────────────────────────────
@@ -118,6 +119,8 @@ router.get(
   // verifyAdminToken,
   getMonthly
 );
+
+
 
 module.exports = router;
 
