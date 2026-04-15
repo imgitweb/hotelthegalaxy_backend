@@ -1,93 +1,35 @@
-// const mongoose = require("mongoose");
-
-// const attendanceSchema = new mongoose.Schema(
-//   {
-//     // Frontend/Controller के अनुसार इसका नाम 'staffId' होना चाहिए
-//     staffId: {
-//       type: mongoose.Schema.Types.ObjectId,
-//       ref: "Staff",
-//       required: true,
-//     },
-
-//     // दिन में एक बार अटेंडेंस के लिए इसे String (YYYY-MM-DD) में रखा है
-//     date: {
-//       type: String, 
-//       required: true,
-//     },
-
-//     checkInTime: {
-//       type: Date,
-//       default: Date.now,
-//     },
-
-//     // इमेज का पाथ सेव करने के लिए 'photo'
-//     photo: {
-//       type: String,
-      
-//     },
-
-//     deviceId: {
-//       type: String,
-//     },
-
-//     location: {
-//       lat: Number,
-//       lng: Number,
-//     },
-
-//     status: {
-//       type: String,
-//       default: "Present",
-//     },
-//   },
-//   { timestamps: true }
-// );
-
-
-// attendanceSchema.index({ staffId: 1, date: 1 }, { unique: true });
-
-
-// const attendance = mongoose.model("Attendance", attendanceSchema);
-// module.exports = { attendance };
-
-
-
-
-// ─── models/attendance.js ─────────────────────────────────────────────────────
 const mongoose = require("mongoose");
 
 const attendanceSchema = new mongoose.Schema(
   {
     staffId: {
-      type:     mongoose.Schema.Types.ObjectId,
-      ref:      "Staff",
+      type: mongoose.Schema.Types.ObjectId,
       required: true,
+      // dynamically decide reference: Staff or Rider
+      refPath: 'role' 
     },
 
     role: {
-    type: String,
-    enum: ["Staff", "Rider"],
-    default: "Staff"
-  },
+      type: String,
+      enum: ["Staff", "Rider"],
+      required: true
+    },
 
-    // "YYYY-MM-DD" — ensures one record per staff per day (via unique index below)
     date: {
-      type:     String,
+      type: String,
       required: true,
     },
 
     checkInTime: {
-      type:    Date,
+      type: Date,
       default: Date.now,
     },
 
-    // Filled when staff checks out
     checkOutTime: {
-      type:    Date,
+      type: Date,
       default: null,
     },
 
-    // Selfie captured at check-in
     photo: {
       type: String,
     },
@@ -101,22 +43,18 @@ const attendanceSchema = new mongoose.Schema(
       lng: Number,
     },
 
-    // "Present" | "Late" | "Absent"
     status: {
-      type:    String,
-      enum:    ["Present", "Late", "Absent"],
+      type: String,
+      enum: ["Present", "Late", "Absent"],
       default: "Present",
     },
   },
   { timestamps: true }
 );
 
-// One attendance record per staff per day
+// Ensure one record per USER per day
 attendanceSchema.index({ staffId: 1, date: 1 }, { unique: true });
-
-// Fast queries for admin dashboard filters
 attendanceSchema.index({ date: 1 });
-attendanceSchema.index({ date: 1, status: 1 });
 
 const attendance = mongoose.model("Attendance", attendanceSchema);
 module.exports = { attendance };

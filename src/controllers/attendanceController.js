@@ -91,76 +91,81 @@ const isLate = (date) => {
   return h > 9 || (h === 9 && m > 30);
 };
 
+
+
 // ─────────────────────────────────────────────────────────────────────────────
 // POST /api/attendance/mark-attendance
 // ─────────────────────────────────────────────────────────────────────────────
 exports.markAttendance = async (req, res) => {
   try {
-    // 1. Get role from the frontend request (defaulting to 'staff')
-    const { qrData, lat, lng, deviceId, role = "staff" } = req.body;
-    console.log(req.body)
+    const { qrData, lat, lng, deviceId, role } = req.body;
 
-    // 2. Safely extract the User ID
-    // (req.riderId comes from Rider JWT, req.staff?.id comes from Staff JWT)
-    const userId = req.riderId || req.user?.id || req.staff?.id || req.user?._id || req.user?.riderId
+    // 1. User ID extract karna (Check all possible auth sources)
+    const userId = req.riderId || req.staff?.id || req.user?.id || req.user?._id || req.user?.riderId;
 
     if (!userId) {
-      return res.status(401).json({ success: false, message: "Unauthorized" });
+      return res.status(401).json({ success: false, message: "Unauthorized: User ID not found" });
     }
+
     if (!req.file) {
       return res.status(400).json({ success: false, message: "Photo is required" });
     }
+
+    // QR Verification from .env
     if (qrData !== process.env.QR_ID) {
       return res.status(400).json({ success: false, message: "Invalid QR Code" });
     }
 
-    // 3. Determine actual user type
-    const isRider = !!userId || role.toLowerCase() === "rider";
+    // 2. Role define karna (Case-insensitive check)
+    // Agar frontend se role nahi aa raha toh token ke data se detect karein
+    let finalRole = "Staff";
+    if (role?.toLowerCase() === "rider" || req.riderId || req.user?.riderId) {
+      finalRole = "Rider";
+    }
 
-    // Set upload path dynamically based on role
-    const folder = isRider ? "rider" : "staff";
-    const photoUrl = `/uploads/${folder}/${req.file.filename}`;
-    
     const now = new Date();
-    const dateString = now.toLocaleDateString("en-CA");
-    const status = isLate(now) ? "Late" : "Present";
+    const dateString = todayStr();
 
-    // 4. Create the Attendance Document
+    // 3. Create the Attendance Document
+    // Note: status hamesha "Present" rahega as per your request
     const newAttendance = new attendance({
-      staffId: userId, // Keeping your existing field name to prevent breaking the schema
-      role: isRider ? "Rider" : "Staff", // Saving role to DB
+      staffId: userId,
+      role: finalRole, 
       date: dateString,
       checkInTime: now,
       location: { lat: parseFloat(lat), lng: parseFloat(lng) },
-      photo: photoUrl,
+      photo: `/uploads/${finalRole.toLowerCase()}/${req.file.filename}`,
       deviceId: deviceId || "unknown",
-      status, // "Present" or "Late"
+      status: "Present", 
     });
 
     await newAttendance.save();
 
-    // 5. Update the correct User Collection based on Role
-    if (isRider) {
-      // 👇 YAHAN CHANGE KIYA HAI: Rider ko 'Available' mark kar diya
+    // 4. Update the respective model (Rider or Staff)
+    if (finalRole === "Rider") {
       await Rider.findByIdAndUpdate(userId, { 
         lastAttendanceAt: now,
-        status: "Available" 
+        status: "Available" // Rider becomes online for orders
       });
     } else {
-      await Staff.findByIdAndUpdate(userId, { lastAttendanceAt: now });
+      await Staff.findByIdAndUpdate(userId, { 
+        lastAttendanceAt: now,
+        status: "Available" // Optional: update staff status if you have a field
+      });
     }
 
     return res.status(200).json({
       success: true,
-      message: `Attendance marked — ${status} ✅`,
+      message: `Attendance marked successfully for ${finalRole} ✅`,
       data: newAttendance,
     });
+
   } catch (error) {
-    // Handle Duplicate Key Error (Unique compound index on staffId + date)
+    // 5. Handle Duplicate Key Error (Unique compound index on staffId + date)
     if (error.code === 11000) {
       return res.status(400).json({ 
         success: false, 
-        message: "Attendance already marked for today!" 
+        message: "Aapki attendance aaj ke liye pehle hi lag chuki hai!" 
       });
     }
 
