@@ -38,15 +38,15 @@ exports.sendOtp = async (req, res) => {
     const now = Date.now();
 
     // Cooldown
-    if (
-      user.otpLastRequestedAt &&
-      now - user.otpLastRequestedAt.getTime() < OTP_COOLDOWN
-    ) {
-      return res.status(429).json({
-        success: false,
-        message: "Please wait before requesting OTP again",
-      });
-    }
+    // if (
+    //   user.otpLastRequestedAt &&
+    //   now - user.otpLastRequestedAt.getTime() < OTP_COOLDOWN
+    // ) {
+    //   return res.status(429).json({
+    //     success: false,
+    //     message: "Please wait before requesting OTP again",
+    //   });
+    // }
 
     // Reset window
     if (

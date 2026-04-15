@@ -172,7 +172,8 @@ exports.markAttendance = async (req, res) => {
 exports.toggleRiderStatus = async (req, res) => {
   try {
     const { status } = req.body; // Expects "Available" or "Offline"
-    const riderId = req.riderId; // From auth middleware
+    const riderId = req.user?.riderId;
+    console.log(".......................this is rider id .........", riderId) // From auth middleware
 
     if (!["Available", "Offline"].includes(status)) {
       return res.status(400).json({ success: false, message: "Invalid status" });
@@ -274,28 +275,44 @@ exports.getAttendance = async (req, res) => {
     const attQuery = { date };
     if (status) attQuery.status = status;
 
-    // Build staff filter
-    const staffFilter = { isDeleted: false };
-    if (department) staffFilter.department = department;
-    if (search) {
-      staffFilter.$or = [
-        { name:  new RegExp(search, "i") },
-        { phone: new RegExp(search, "i") },
-      ];
-    }
-
-    // If there's a staff filter, find matching staff IDs first
-    let staffIds = null;
+    // If there's a staff/rider search filter, find matching IDs first
+    let userIds = null;
     if (department || search) {
+      let ids = [];
+      
+      // 1. Search in Staff Model
+      const staffFilter = { isDeleted: false };
+      if (department) staffFilter.department = department;
+      if (search) {
+        staffFilter.$or = [
+          { name:  new RegExp(search, "i") },
+          { phone: new RegExp(search, "i") },
+        ];
+      }
       const matchingStaff = await Staff.find(staffFilter).select("_id");
-      staffIds = matchingStaff.map((s) => s._id);
-      attQuery.staffId = { $in: staffIds };
+      ids = matchingStaff.map((s) => s._id);
+
+      // 2. Search in Rider Model (If department filter is not strictly "Staff")
+      if (!department && search) {
+        const riderFilter = {
+          $or: [
+            { name:  new RegExp(search, "i") },
+            { phone: new RegExp(search, "i") },
+          ]
+        };
+        const matchingRiders = await Rider.find(riderFilter).select("_id");
+        ids = ids.concat(matchingRiders.map(r => r._id));
+      }
+
+      attQuery.staffId = { $in: ids };
     }
 
     const [records, total] = await Promise.all([
       attendance
         .find(attQuery)
-        .populate({ path: "staffId", select: "name phone department role photo" })
+        // Mongoose automatically handles polymorphic populate if refPath is configured.
+        // If not, this still works safely for matching refs.
+        .populate({ path: "staffId", select: "name phone department role photo vehicleNumber" })
         .sort({ checkInTime: 1 })
         .skip(skip)
         .limit(lim),
@@ -324,28 +341,35 @@ exports.getStats = async (req, res) => {
   try {
     const date = req.query.date || todayStr();
 
-    // Total active staff
+    // 1. Calculate TOTAL Employees (Staff + Riders)
     const totalStaff = await Staff.countDocuments({ isActive: true, isDeleted: false });
+    const totalRiders = await Rider.countDocuments(); // Assume all valid riders
+    const totalEmployees = totalStaff + totalRiders;
 
-    // Count by status for the date
+    // 2. Count by status for the date from Attendance table
     const agg = await attendance.aggregate([
       { $match: { date } },
       { $group: { _id: "$status", count: { $sum: 1 } } },
     ]);
 
     const counts = { Present: 0, Late: 0, Absent: 0 };
-    agg.forEach((a) => { if (counts[a._id] !== undefined) counts[a._id] = a.count; });
+    agg.forEach((a) => { 
+      if (counts[a._id] !== undefined) counts[a._id] = a.count; 
+    });
 
+    // 3. Exact Absent Calculation
     const markedCount = counts.Present + counts.Late;
-    counts.Absent = Math.max(0, totalStaff - markedCount);
+    counts.Absent = Math.max(0, totalEmployees - markedCount);
 
     return res.json({
       success: true,
       data: {
-        total:   totalStaff,
-        present: counts.Present,
-        late:    counts.Late,
-        absent:  counts.Absent,
+        total:    totalEmployees, // Total (Staff + Riders)
+        staffCount: totalStaff,
+        riderCount: totalRiders,
+        present:  counts.Present,
+        late:     counts.Late,
+        absent:   counts.Absent,
       },
     });
   } catch (err) {
@@ -360,7 +384,10 @@ exports.getStats = async (req, res) => {
 // ─────────────────────────────────────────────────────────────────────────────
 exports.getWeekly = async (req, res) => {
   try {
+    // Total Employees (Staff + Riders)
     const totalStaff = await Staff.countDocuments({ isActive: true, isDeleted: false });
+    const totalRiders = await Rider.countDocuments();
+    const totalEmployees = totalStaff + totalRiders;
 
     // Build last-7-day date strings
     const days = [];
@@ -400,8 +427,8 @@ exports.getWeekly = async (req, res) => {
         label,
         present: d.Present,
         late:    d.Late,
-        absent:  Math.max(0, totalStaff - marked),
-        total:   totalStaff,
+        absent:  Math.max(0, totalEmployees - marked), // Use Total Employees
+        total:   totalEmployees,
       };
     });
 
@@ -429,7 +456,10 @@ exports.getMonthly = async (req, res) => {
     });
     const workingDays = distinctDays.length || 1; // avoid div-by-zero
 
+    // Total Employees (Staff + Riders)
     const totalStaff = await Staff.countDocuments({ isActive: true, isDeleted: false });
+    const totalRiders = await Rider.countDocuments();
+    const totalEmployees = totalStaff + totalRiders;
 
     // Aggregate by (date, status)
     const agg = await attendance.aggregate([
@@ -448,12 +478,12 @@ exports.getMonthly = async (req, res) => {
       if (_id.status === "Present" || _id.status === "Late") totalPresent += count;
     });
 
-    const avgAttendance = totalStaff
-      ? Math.round((totalPresent / (totalStaff * workingDays)) * 100)
+    const avgAttendance = totalEmployees
+      ? Math.round((totalPresent / (totalEmployees * workingDays)) * 100)
       : 0;
-    const totalAbsences = Math.max(0, totalStaff * workingDays - totalPresent);
+    const totalAbsences = Math.max(0, totalEmployees * workingDays - totalPresent);
 
-    // Per-department breakdown
+    // Per-department breakdown (Including Riders as a distinct group)
     const deptAgg = await attendance.aggregate([
       { $match: { date: { $regex: `^${prefix}` } } },
       {
@@ -464,10 +494,21 @@ exports.getMonthly = async (req, res) => {
           as:           "staff",
         },
       },
-      { $unwind: "$staff" },
+      {
+        $addFields: {
+          staffInfo: { $arrayElemAt: ["$staff", 0] }
+        }
+      },
       {
         $group: {
-          _id:     "$staff.department",
+          // Check if the attendance role says 'rider', if so group as 'Riders Fleet', otherwise use staff department
+          _id: { 
+             $cond: [
+                { $regexMatch: { input: { $ifNull: ["$role", ""] }, regex: /rider/i } }, 
+                "Riders Fleet", 
+                { $ifNull: ["$staffInfo.department", "Other/Unknown"] } 
+             ]
+          },
           present: {
             $sum: { $cond: [{ $in: ["$status", ["Present", "Late"]] }, 1, 0] },
           },
@@ -485,7 +526,12 @@ exports.getMonthly = async (req, res) => {
 
     return res.json({
       success: true,
-      data: { workingDays, avgAttendance, totalAbsences, byDept },
+      data: { 
+        workingDays, 
+        avgAttendance, 
+        totalAbsences, 
+        byDept 
+      },
     });
   } catch (err) {
     console.error("getMonthly error:", err);

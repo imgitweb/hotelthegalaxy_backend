@@ -27,8 +27,8 @@ const riderSchema = new mongoose.Schema(
     },
     status: {
       type: String,
-      enum: ["Available", "On-Trip", "Offline"],
-      default: "Offline",
+      enum: ["Available", "On-Trip", "Offline","Not-Arrived"],
+      default: "Not-Arrived",
     },
     role: {
       type: String,

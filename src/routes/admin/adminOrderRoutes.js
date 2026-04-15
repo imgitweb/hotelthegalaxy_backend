@@ -12,7 +12,7 @@ router.patch("/orders/:id/cancel", protect, orderAdminController.cancelOrder);
 router.patch(
   "/orders/:id/assign-rider",
   protect,
-  orderAdminController.assignRiderToOrder,
+  orderAdminController.assignRider,
 );
 
 module.exports = router;
