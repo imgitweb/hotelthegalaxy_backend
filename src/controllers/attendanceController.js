@@ -115,7 +115,7 @@ exports.markAttendance = async (req, res) => {
     }
 
     // 3. Determine actual user type
-    const isRider = !!req.riderId || role.toLowerCase() === "rider";
+    const isRider = !!userId || role.toLowerCase() === "rider";
 
     // Set upload path dynamically based on role
     const folder = isRider ? "rider" : "staff";
