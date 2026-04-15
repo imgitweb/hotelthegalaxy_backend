@@ -257,78 +257,126 @@ exports.checkOut = async (req, res) => {
   }
 };
 
-// ─────────────────────────────────────────────────────────────────────────────
-// GET /api/admin/attendance
-// Query params: date, department, status, search, page, limit
-// ─────────────────────────────────────────────────────────────────────────────
+
+
+
 exports.getAttendance = async (req, res) => {
   try {
     const {
-      date       = todayStr(),
+      date = todayStr(),
       department = "",
-      status     = "",
-      search     = "",
-      page       = 1,
-      limit      = 10,
+      status = "",
+      search = "",
+       role = "",
+      page = 1,
+      limit = 10,
     } = req.query;
 
-    const pg  = Math.max(1, parseInt(page));
+    const pg = Math.max(1, parseInt(page));
     const lim = Math.min(100, Math.max(1, parseInt(limit)));
     const skip = (pg - 1) * lim;
 
-    // Build attendance query
-    const attQuery = { date };
-    if (status) attQuery.status = status;
+    const matchStage = {
+      date,
+      ...(status && { status }),
+    };
 
-    // If there's a staff/rider search filter, find matching IDs first
-    let userIds = null;
-    if (department || search) {
-      let ids = [];
-      
-      // 1. Search in Staff Model
-      const staffFilter = { isDeleted: false };
-      if (department) staffFilter.department = department;
-      if (search) {
-        staffFilter.$or = [
-          { name:  new RegExp(search, "i") },
-          { phone: new RegExp(search, "i") },
-        ];
-      }
-      const matchingStaff = await Staff.find(staffFilter).select("_id");
-      ids = matchingStaff.map((s) => s._id);
+   const pipeline = [
+  { $match: matchStage },
 
-      // 2. Search in Rider Model (If department filter is not strictly "Staff")
-      if (!department && search) {
-        const riderFilter = {
-          $or: [
-            { name:  new RegExp(search, "i") },
-            { phone: new RegExp(search, "i") },
-          ]
-        };
-        const matchingRiders = await Rider.find(riderFilter).select("_id");
-        ids = ids.concat(matchingRiders.map(r => r._id));
-      }
+  {
+    $lookup: {
+      from: "staffs",
+      localField: "staffId",
+      foreignField: "_id",
+      as: "staff",
+    },
+  },
+  {
+    $lookup: {
+      from: "riders",
+      localField: "staffId",
+      foreignField: "_id",
+      as: "rider",
+    },
+  },
 
-      attQuery.staffId = { $in: ids };
-    }
+  {
+    $addFields: {
+      user: {
+        $cond: [
+          { $gt: [{ $size: "$staff" }, 0] },
+          { $arrayElemAt: ["$staff", 0] },
+          { $arrayElemAt: ["$rider", 0] },
+        ],
+      },
+    },
+  },
 
-    const [records, total] = await Promise.all([
-      attendance
-        .find(attQuery)
-        // Mongoose automatically handles polymorphic populate if refPath is configured.
-        // If not, this still works safely for matching refs.
-        .populate({ path: "staffId", select: "name phone department role photo vehicleNumber" })
-        .sort({ checkInTime: 1 })
-        .skip(skip)
-        .limit(lim),
-      attendance.countDocuments(attQuery),
-    ]);
+  // 🔥 SEARCH
+  ...(search
+    ? [
+        {
+          $match: {
+            $or: [
+              { "user.name": { $regex: search, $options: "i" } },
+              { "user.phone": { $regex: search, $options: "i" } },
+            ],
+          },
+        },
+      ]
+    : []),
+
+  ...(department
+    ? [{ $match: { "user.department": department } }]
+    : []),
+
+
+      ...(role
+    ? [
+        {
+          $match: {
+            role: { $regex: `^${role}$`, $options: "i" },
+          },
+        },
+      ]
+    : []),
+
+  // ✅ 🔥 FIX HERE
+  {
+    $addFields: {
+      staffId: "$user",
+    },
+  },
+
+  {
+    $project: {
+      staff: 0,
+      rider: 0,
+      user: 0,
+    },
+  },
+
+  { $sort: { checkInTime: 1 } },
+
+  {
+    $facet: {
+      data: [{ $skip: skip }, { $limit: lim }],
+      total: [{ $count: "count" }],
+    },
+  },
+];
+
+    const result = await attendance.aggregate(pipeline);
+
+    const data = result[0].data;
+    const total = result[0].total[0]?.count || 0;
 
     return res.json({
-      success:    true,
-      data:       records,
+      success: true,
+      data,
       total,
-      page:       pg,
+      page: pg,
       totalPages: Math.ceil(total / lim),
     });
   } catch (err) {
