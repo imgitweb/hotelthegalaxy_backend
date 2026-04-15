@@ -430,6 +430,154 @@ exports.handleCancel = async (req, res, next) => {
   }
 };
 
+exports.handleWebhook = async (req, res) => {
+  console.log("🔥 WEBHOOK ROUTE HIT!");
+
+  try {
+    const webhookSignature = req.headers["x-razorpay-signature"];
+    const WEBHOOK_SECRET = process.env.RAZORPAY_WEBHOOK_SECRET;
+
+    const rawBody = req.body.toString("utf8");
+
+    const expectedSignature = crypto
+      .createHmac("sha256", WEBHOOK_SECRET)
+      .update(rawBody)
+      .digest("hex");
+
+    if (expectedSignature !== webhookSignature) {
+      console.log("❌ Invalid webhook signature!");
+      return res.status(400).json({ error: "Invalid signature" });
+    }
+
+    console.log("✅ Webhook Signature verified");
+
+    const payload = JSON.parse(rawBody);
+    const eventType = payload.event;
+    const paymentData = payload.payload.payment.entity;
+
+    const dbOrderId = paymentData.notes?.dbOrderId;
+
+    if (!dbOrderId) {
+      console.log("⚠️ No dbOrderId found in Razorpay notes");
+      return res.status(200).json({ status: "ok" });
+    }
+
+    // ✅ PAYMENT SUCCESS
+    if (eventType === "payment.captured" || eventType === "payment_link.paid") {
+      console.log("💰 Payment success for:", dbOrderId);
+
+      const payment = await Payment.findOne({ order: dbOrderId });
+
+      if (!payment || payment.status === "SUCCESS") {
+        console.log("ℹ️ Payment already processed or not found");
+        return res.status(200).json({ status: "ok" });
+      }
+
+      // ✅ Update Payment Collection
+      await Payment.findByIdAndUpdate(payment._id, {
+        status: "SUCCESS",
+        transactionId: paymentData.id,
+      });
+
+      // 🔐 STRICT 6-DIGIT OTP GENERATION
+      // Ye guarantee karega ki OTP hamesha 6 numbers ka hi hoga (e.g., 835291)
+      const otp = Math.floor(100000 + Math.random() * 900000).toString();
+      const hashedOtp = hashOTP(otp);
+      
+      console.log("🔐 NEW 6-DIGIT DELIVERY OTP:", otp);
+
+      // ✅ FIX: Update Order AND Delivery OTP in a SINGLE Database Call
+      // Isse `.save()` ki zaroorat nahi padegi aur data perfectly save hoga
+      const updatedOrder = await Order.findByIdAndUpdate(
+        dbOrderId,
+        {
+          "payment.status": "paid",
+          "payment.transactionId": paymentData.id,
+          "payment.method": paymentData.method || "razorpay",
+          status: "confirmed",
+          "timeline.confirmedAt": new Date(),
+          
+          // OTP Data direct yahin save kar rahe hain
+          "deliveryOTP.code": hashedOtp,
+          "deliveryOTP.expiresAt": new Date(Date.now() + 10 * 60 * 1000), // 10 mins expiry
+          "deliveryOTP.verified": false,
+          "deliveryOTP.attempts": 0,
+        },
+        { returnDocument: "after" } // 🔥 Fixed Mongoose Deprecation Warning
+      ).populate("user", "phone"); // User populate kar liya taaki phone number easily mil jaye
+
+      console.log("✅ ORDER & OTP UPDATED IN DB:", updatedOrder?._id);
+
+      if (!updatedOrder) {
+        console.log("❌ Order not found in database");
+        return res.status(200).json({ status: "ok" });
+      }
+
+      // 📲 PHONE FORMATTING & EXTRACTION
+      let userPhone = paymentData.notes?.phone || updatedOrder.address?.phone || updatedOrder.user?.phone;
+
+      console.log("📞 RAW PHONE:", userPhone);
+
+      if (userPhone) {
+        userPhone = userPhone.toString().replace(/\D/g, "");
+
+        if (userPhone.length === 10) {
+          userPhone = "91" + userPhone;
+        }
+
+        console.log("📞 FINAL PHONE:", userPhone);
+
+        // 🔥 SEND OTP TEMPLATE (Uncomment when ready to use)
+        // try {
+        //   const otpRes = await sendAuthTemplate("+" + userPhone, otp);
+        //   console.log("📲 OTP WhatsApp Response:", otpRes);
+        // } catch (err) {
+        //   console.error("❌ OTP send error:", err.message);
+        // }
+
+        // 🔥 SEND ORDER CONFIRMATION MESSAGE
+        const orderNumber = updatedOrder.orderNumber || updatedOrder._id.toString().slice(-6).toUpperCase();
+
+        const msg = `🎉 *Order Confirmed!*\n\n🧾 Order: ${orderNumber}\n\n🔐 OTP: ${otp}\n\n⚠️ Delivery ke time rider ko OTP batana hai.`;
+
+        const interactiveMsg = {
+          type: "button",
+          body: { text: msg },
+          action: {
+            buttons: [
+              {
+                type: "reply",
+                reply: { id: "track", title: "📦 Track Order" },
+              },
+            ],
+          },
+        };
+
+        try {
+          await sendInteractiveMessage(userPhone, interactiveMsg);
+          console.log("✅ Order WhatsApp sent to Customer");
+        } catch (err) {
+          console.error("❌ Order message error:", err.message);
+        }
+      } else {
+        console.log("❌ Phone not found, could not send WhatsApp message");
+      }
+    }
+
+    // Razorpay requires a 200 OK response quickly
+    return res.status(200).json({ status: "ok" });
+    
+  } catch (error) {
+    console.error("🔥 Webhook error:", error);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+};
+
+
+
+
+
+
 // exports.handleWebhook = async (req, res) => {
 //   console.log("🔥 WEBHOOK ROUTE HIT!"); 
 
@@ -574,151 +722,151 @@ exports.handleCancel = async (req, res, next) => {
 
 
 
-exports.handleWebhook = async (req, res) => {
-  console.log("🔥 WEBHOOK ROUTE HIT!");
+// exports.handleWebhook = async (req, res) => {
+//   console.log("🔥 WEBHOOK ROUTE HIT!");
 
-  try {
-    const webhookSignature = req.headers["x-razorpay-signature"];
-    const WEBHOOK_SECRET = process.env.RAZORPAY_WEBHOOK_SECRET;
+//   try {
+//     const webhookSignature = req.headers["x-razorpay-signature"];
+//     const WEBHOOK_SECRET = process.env.RAZORPAY_WEBHOOK_SECRET;
 
-    const rawBody = req.body.toString("utf8");
+//     const rawBody = req.body.toString("utf8");
 
-    const expectedSignature = crypto
-      .createHmac("sha256", WEBHOOK_SECRET)
-      .update(rawBody)
-      .digest("hex");
+//     const expectedSignature = crypto
+//       .createHmac("sha256", WEBHOOK_SECRET)
+//       .update(rawBody)
+//       .digest("hex");
 
-    if (expectedSignature !== webhookSignature) {
-      console.log("❌ Invalid webhook signature!");
-      return res.status(400).json({ error: "Invalid signature" });
-    }
+//     if (expectedSignature !== webhookSignature) {
+//       console.log("❌ Invalid webhook signature!");
+//       return res.status(400).json({ error: "Invalid signature" });
+//     }
 
-    console.log("✅ Webhook Signature verified");
+//     console.log("✅ Webhook Signature verified");
 
-    const payload = JSON.parse(rawBody);
-    const eventType = payload.event;
-    const paymentData = payload.payload.payment.entity;
+//     const payload = JSON.parse(rawBody);
+//     const eventType = payload.event;
+//     const paymentData = payload.payload.payment.entity;
 
-    const dbOrderId = paymentData.notes?.dbOrderId;
+//     const dbOrderId = paymentData.notes?.dbOrderId;
 
-    if (!dbOrderId) {
-      console.log("⚠️ No dbOrderId found");
-      return res.status(200).json({ status: "ok" });
-    }
+//     if (!dbOrderId) {
+//       console.log("⚠️ No dbOrderId found");
+//       return res.status(200).json({ status: "ok" });
+//     }
 
-    // ✅ PAYMENT SUCCESS
-    if (eventType === "payment.captured" || eventType === "payment_link.paid") {
-      console.log("💰 Payment success for:", dbOrderId);
+//     // ✅ PAYMENT SUCCESS
+//     if (eventType === "payment.captured" || eventType === "payment_link.paid") {
+//       console.log("💰 Payment success for:", dbOrderId);
 
-      const payment = await Payment.findOne({ order: dbOrderId });
+//       const payment = await Payment.findOne({ order: dbOrderId });
 
-      if (!payment || payment.status === "SUCCESS") {
-        console.log("ℹ️ Already processed");
-        return res.status(200).json({ status: "ok" });
-      }
+//       if (!payment || payment.status === "SUCCESS") {
+//         console.log("ℹ️ Already processed");
+//         return res.status(200).json({ status: "ok" });
+//       }
 
-      // ✅ Update Payment
-      await Payment.findByIdAndUpdate(payment._id, {
-        status: "SUCCESS",
-        transactionId: paymentData.id,
-      });
+//       // ✅ Update Payment
+//       await Payment.findByIdAndUpdate(payment._id, {
+//         status: "SUCCESS",
+//         transactionId: paymentData.id,
+//       });
 
-      // ✅ FIX: GET updatedOrder properly
-      const updatedOrder = await Order.findByIdAndUpdate(
-        dbOrderId,
-        {
-          "payment.status": "paid",
-          "payment.transactionId": paymentData.id,
-          "payment.method": paymentData.method || "razorpay",
-          status: "confirmed",
-          "timeline.confirmedAt": new Date(),
-        },
-        { new: true } // 🔥 MUST
-      );
+//       // ✅ FIX: GET updatedOrder properly
+//       const updatedOrder = await Order.findByIdAndUpdate(
+//         dbOrderId,
+//         {
+//           "payment.status": "paid",
+//           "payment.transactionId": paymentData.id,
+//           "payment.method": paymentData.method || "razorpay",
+//           status: "confirmed",
+//           "timeline.confirmedAt": new Date(),
+//         },
+//         { new: true } // 🔥 MUST
+//       );
 
-      console.log("✅ ORDER UPDATED:", updatedOrder?._id);
+//       console.log("✅ ORDER UPDATED:", updatedOrder?._id);
 
-      if (!updatedOrder) {
-        console.log("❌ Order not found");
-        return res.status(200).json({ status: "ok" });
-      }
+//       if (!updatedOrder) {
+//         console.log("❌ Order not found");
+//         return res.status(200).json({ status: "ok" });
+//       }
 
-      // 🔐 OTP GENERATE
-      const otp = generateOTP();
-      const hashedOtp = hashOTP(otp);
+//       // 🔐 OTP GENERATE
+//       const otp = Math.floor(100000 + Math.random() * 900000).toString();;
+//       const hashedOtp = hashOTP(otp);
 
-      updatedOrder.deliveryOTP = {
-        code: hashedOtp,
-        expiresAt: new Date(Date.now() + 10 * 60 * 1000),
-        verified: false,
-        attempts: 0,
-      };
+//       updatedOrder.deliveryOTP = {
+//         code: hashedOtp,
+//         expiresAt: new Date(Date.now() + 10 * 60 * 1000),
+//         verified: false,
+//         attempts: 0,
+//       };
 
-      await updatedOrder.save();
+//       await updatedOrder.save();
 
-      console.log("🔐 DELIVERY OTP:", otp);
+//       console.log("🔐 DELIVERY OTP:", otp);
 
-      // 📲 PHONE FORMAT
-      let userPhone =
-        paymentData.notes?.phone || updatedOrder.address?.phone;
+//       // 📲 PHONE FORMAT
+//       let userPhone =
+//         paymentData.notes?.phone || updatedOrder.address?.phone;
 
-      console.log("📞 RAW PHONE:", userPhone);
+//       console.log("📞 RAW PHONE:", userPhone);
 
-      if (userPhone) {
-        userPhone = userPhone.toString().replace(/\D/g, "");
+//       if (userPhone) {
+//         userPhone = userPhone.toString().replace(/\D/g, "");
 
-        if (userPhone.length === 10) {
-          userPhone = "91" + userPhone;
-        }
+//         if (userPhone.length === 10) {
+//           userPhone = "91" + userPhone;
+//         }
 
-        console.log("📞 FINAL PHONE:", userPhone);
+//         console.log("📞 FINAL PHONE:", userPhone);
 
-        // 🔥 SEND OTP TEMPLATE
-        // try {
-        //   const otpRes = await sendAuthTemplate("+" + userPhone, otp);
-        //   console.log("📲 OTP WhatsApp Response:", otpRes);
-        // } catch (err) {
-        //   console.error("❌ OTP send error:", err.message);
-        // }
+//         // 🔥 SEND OTP TEMPLATE
+//         // try {
+//         //   const otpRes = await sendAuthTemplate("+" + userPhone, otp);
+//         //   console.log("📲 OTP WhatsApp Response:", otpRes);
+//         // } catch (err) {
+//         //   console.error("❌ OTP send error:", err.message);
+//         // }
 
-        // 🔥 SEND ORDER MESSAGE
-        const orderNumber = updatedOrder.orderNumber;
+//         // 🔥 SEND ORDER MESSAGE
+//         const orderNumber = updatedOrder.orderNumber;
 
-        const msg = `🎉 *Order Confirmed!*
+//         const msg = `🎉 *Order Confirmed!*
 
-🧾 Order: ${orderNumber}
+// 🧾 Order: ${orderNumber}
 
-🔐 OTP: ${otp}
+// 🔐 OTP: ${otp}
 
-⚠️ Delivery ke time rider ko OTP batana hai.`;
+// ⚠️ Delivery ke time rider ko OTP batana hai.`;
 
-        const interactiveMsg = {
-          type: "button",
-          body: { text: msg },
-          action: {
-            buttons: [
-              {
-                type: "reply",
-                reply: { id: "track", title: "📦 Track Order" },
-              },
-            ],
-          },
-        };
+//         const interactiveMsg = {
+//           type: "button",
+//           body: { text: msg },
+//           action: {
+//             buttons: [
+//               {
+//                 type: "reply",
+//                 reply: { id: "track", title: "📦 Track Order" },
+//               },
+//             ],
+//           },
+//         };
 
-        try {
-          await sendInteractiveMessage(userPhone, interactiveMsg);
-          console.log("✅ Order WhatsApp sent");
-        } catch (err) {
-          console.error("❌ Order message error:", err.message);
-        }
-      } else {
-        console.log("❌ Phone not found");
-      }
-    }
+//         try {
+//           await sendInteractiveMessage(userPhone, interactiveMsg);
+//           console.log("✅ Order WhatsApp sent");
+//         } catch (err) {
+//           console.error("❌ Order message error:", err.message);
+//         }
+//       } else {
+//         console.log("❌ Phone not found");
+//       }
+//     }
 
-    return res.status(200).json({ status: "ok" });
-  } catch (error) {
-    console.error("🔥 Webhook error:", error);
-    return res.status(500).json({ error: "Internal server error" });
-  }
-};
+//     return res.status(200).json({ status: "ok" });
+//   } catch (error) {
+//     console.error("🔥 Webhook error:", error);
+//     return res.status(500).json({ error: "Internal server error" });
+//   }
+// };
