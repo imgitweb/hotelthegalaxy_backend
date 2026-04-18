@@ -108,6 +108,7 @@ exports.updateStaff = async (req, res, next) => {
     next(err);
   }
 };
+
 exports.deleteStaff = async (req, res, next) => {
   try {
     const { id } = req.params;
@@ -141,6 +142,7 @@ exports.deleteStaff = async (req, res, next) => {
     next(err);
   }
 };
+
 exports.getSingleStaff = async (req, res, next) => {
   try {
     const { id } = req.params;
@@ -166,3 +168,4 @@ exports.getSingleStaff = async (req, res, next) => {
     next(err);
   }
 };
+

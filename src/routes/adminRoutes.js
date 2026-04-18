@@ -6,7 +6,7 @@ const {
   adminLogout,
   getCurrentAdmin,
 } = require("../controllers/adminAuthController");
-const adminAuth = require("../middleware/adminAuth");
+const { adminAuth, authorizeRoles } = require("../middleware/adminAuth");
 const validate = require("../middleware/validate");
 const router = express.Router();
 router.post(

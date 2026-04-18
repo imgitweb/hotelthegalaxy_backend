@@ -2,6 +2,11 @@ const express = require("express");
 const router = express.Router();
 const roomController = require("../controllers/roomController");
 const upload = require("../config/multer");
+const  {adminAuth,authorizeRoles} = require("../middleware/adminAuth")
+
+
+router.use(adminAuth);
+router.use(authorizeRoles("admin"));
 router.post(
   "/",
   upload.array("images", 5),

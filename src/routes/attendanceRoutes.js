@@ -44,6 +44,10 @@ const {
   
 } = require("../controllers/attendanceController");
 
+const { adminAuth, authorizeRoles } = require("../middleware/adminAuth")
+
+
+
 // ─── import your auth middlewares ─────────────────────────────────────────────
 // const { verifyStaffToken } = require("../middlewares/authMiddleware");
 // const { verifyAdminToken } = require("../middlewares/authMiddleware");
@@ -68,6 +72,9 @@ const upload = multer({
     cb(null, allowed.includes(file.mimetype));
   },
 });
+
+router.use(adminAuth);
+router.use(authorizeRoles("admin"));
 
 // ─────────────────────────────────────────────────────────────────────────────
 // STAFF-FACING routes (require staff JWT)

@@ -1,8 +1,8 @@
 const Order = require("../../models/User/ordersModel");
+const { getIO } = require("../../config/socket");
 const Trip = require("../../models/TripModel");
 const Rider = require("../../models/rider.model");
 const { generateOTPMap } = require("../../utils/otp");
-const { getWebSocketServer } = require("../../../websocket");
 const STATUS_FLOW = {
   pending: ["confirmed", "cancelled"],
   confirmed: ["preparing", "out_for_delivery", "cancelled"],
@@ -207,7 +207,7 @@ exports.cancelOrder = async (req, res, next) => {
 exports.assignRider = async (req, res, next) => {
   try {
     const { riderId } = req.body;
-    console.log("..............",req.body)
+    console.log("..............", req.body);
 
     console.log("📥 Assign Rider Request:", {
       orderId: req.params.id,
@@ -222,7 +222,8 @@ exports.assignRider = async (req, res, next) => {
       });
     }
 
-    const order = await Order.findById(req.params.id);
+    // Populate user and rider info so we can send complete data via socket if needed
+    const order = await Order.findById(req.params.id).populate("user", "name email phone");
 
     if (!order) {
       console.log("❌ Order not found");
@@ -231,6 +232,7 @@ exports.assignRider = async (req, res, next) => {
         message: "Order not found",
       });
     }
+    
     if (FINAL_STATES.includes(order.status)) {
       console.log("🚫 Cannot assign rider to final state");
       return res.status(400).json({
@@ -304,8 +306,40 @@ exports.assignRider = async (req, res, next) => {
     }
 
     await order.save();
-
     console.log("💾 Order saved after rider assignment");
+
+    // ============================
+    // ⚡ WEBSOCKET EMIT (ASSIGN RIDER)
+    // ============================
+    try {
+      const io = getIO();
+      
+      // 1. Emit to Admin Dashboard
+      io.to("admin_room").emit("admin_order_updated", {
+        orderId: order._id,
+        status: order.status,
+        riderId: order.rider,
+        message: "Rider assigned successfully",
+      });
+
+      // 2. Emit to the specific Rider App
+      io.to(`rider_${order.rider}`).emit("new_trip_assigned", {
+        orderId: order._id,
+        tripId: order.tripId,
+        message: "You have been assigned a new order",
+      });
+
+      // 3. Emit to User Order Tracking Room
+      io.to(order._id.toString()).emit("order_update", {
+        orderId: order._id,
+        status: order.status,
+        message: "A rider has been assigned and your order is out for delivery",
+      });
+
+      console.log("⚡ Socket events emitted successfully for rider assignment");
+    } catch (socketErr) {
+      console.error("⚠️ Socket emit error (Assign Rider):", socketErr.message);
+    }
 
     res.status(200).json({
       success: true,
@@ -316,6 +350,120 @@ exports.assignRider = async (req, res, next) => {
     next(error);
   }
 };
+
+
+// exports.assignRider = async (req, res, next) => {
+//   try {
+//     const { riderId } = req.body;
+//     console.log("..............",req.body)
+
+//     console.log("📥 Assign Rider Request:", {
+//       orderId: req.params.id,
+//       riderId,
+//     });
+
+//     if (!riderId) {
+//       console.log("❌ Rider ID missing");
+//       return res.status(400).json({
+//         success: false,
+//         message: "Rider ID required",
+//       });
+//     }
+
+//     const order = await Order.findById(req.params.id);
+
+//     if (!order) {
+//       console.log("❌ Order not found");
+//       return res.status(404).json({
+//         success: false,
+//         message: "Order not found",
+//       });
+//     }
+//     if (FINAL_STATES.includes(order.status)) {
+//       console.log("🚫 Cannot assign rider to final state");
+//       return res.status(400).json({
+//         success: false,
+//         message: "Cannot assign rider",
+//       });
+//     }
+
+//     if (order.rider) {
+//       console.log("⚠️ Rider already assigned");
+//       return res.status(400).json({
+//         success: false,
+//         message: "Rider already assigned",
+//       });
+//     }
+
+//     order.rider = riderId;
+
+//     console.log("✅ Rider assigned");
+//     if (!["delivered", "cancelled"].includes(order.status)) {
+//       if (order.status !== "out_for_delivery") {
+//         order.status = "out_for_delivery";
+//         order.outForDeliveryAt = new Date();
+//         console.log("🚴 Order status moved to out_for_delivery");
+//       }
+
+//       const existingTrip = await Trip.findOne({
+//         riderId: order.rider,
+//         status: "Active",
+//       });
+
+//       if (existingTrip) {
+//         if (!existingTrip.orderIds.includes(order._id)) {
+//           existingTrip.orderIds.push(order._id);
+//           await existingTrip.save();
+//           console.log("✅ Order added to existing trip:", existingTrip.tripId);
+//         }
+//         order.tripId = existingTrip._id;
+//       } else {
+//         const tripId = `TRIP_${Date.now()}_${Math.random()
+//           .toString(36)
+//           .substr(2, 9)
+//           .toUpperCase()}`;
+//         const otpMap = generateOTPMap([order._id.toString()]);
+
+//         const trip = await Trip.create({
+//           tripId,
+//           riderId: order.rider,
+//           orderIds: [order._id],
+//           status: "Active",
+//           orderOtps: otpMap,
+//           totalEarnings: order.pricing?.total || 0,
+//         });
+
+//         order.deliveryOTP = {
+//           code: otpMap[order._id.toString()],
+//           generatedAt: new Date(),
+//           verifiedAt: null,
+//           attempts: 0,
+//           maxAttempts: 3,
+//         };
+
+//         await Rider.findByIdAndUpdate(order.rider, {
+//           status: "On-Trip",
+//           currentTripId: trip._id,
+//         });
+
+//         order.tripId = trip._id;
+//         console.log("✅ New trip created:", trip.tripId);
+//       }
+//     }
+
+//     await order.save();
+
+//     console.log("💾 Order saved after rider assignment");
+
+//     res.status(200).json({
+//       success: true,
+//       data: order,
+//     });
+//   } catch (error) {
+//     console.error("❌ Error in assignRider:", error);
+//     next(error);
+//   }
+// };
 
 exports.getOrderHistory = async (req, res, next) => {
   try {
