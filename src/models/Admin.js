@@ -25,8 +25,8 @@ const adminSchema = new mongoose.Schema(
 
     role: {
       type: String,
-      enum: ["admin", "superadmin"],
-      default: "admin",
+      enum: ["admin", "manager"],
+      default: "manager",
       index: true,
     },
 
@@ -35,11 +35,15 @@ const adminSchema = new mongoose.Schema(
       default: true,
       index: true,
     },
+    resetOtp: String,
+    resetOtpExpire: Date,
+
+    lastLogin: Date,
   },
   {
     timestamps: true,
     versionKey: false,
-  },
+  }
 );
 
 adminSchema.pre("save", async function (next) {
@@ -53,7 +57,7 @@ adminSchema.pre("save", async function (next) {
 
     next();
   } catch (error) {
-    console.log(error);
+   console.log(error);
   }
 });
 

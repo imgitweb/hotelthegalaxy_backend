@@ -7,5 +7,5 @@ router.get("/category-sales", dashboard.getCategorySales);
 router.get("/top-dishes", dashboard.getTopDishes);
 router.get("/orders-by-landmark", dashboard.getOrdersByLandmark);
 router.get("/most-selling", dashboard.getMostSellingItem);
-
+router.get("/filtered-report", dashboard.getFilteredReport);
 module.exports = router;

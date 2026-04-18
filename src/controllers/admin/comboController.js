@@ -66,7 +66,11 @@ const createCombo = async (req, res) => {
 
 const getCombos = async (req, res) => {
   try {
-    const combos = await Combo.find()
+    const { includeDeleted } = req.query;
+
+    const filter = includeDeleted === "true" ? {} : { isDeleted: false };
+
+    const combos = await Combo.find(filter)
       .populate("items.item")
       .sort({ createdAt: -1 });
 
@@ -137,7 +141,42 @@ const updateCombo = async (req, res) => {
 
 const deleteCombo = async (req, res) => {
   try {
-    const combo = await Combo.findByIdAndDelete(req.params.id);
+    const combo = await Combo.findById(req.params.id);
+
+    if (!combo || combo.isDeleted) {
+      return res.status(404).json({
+        success: false,
+        message: "Combo not found",
+      });
+    }
+
+    combo.isDeleted = true;
+    combo.isActive = false;
+    combo.deletedAt = new Date();
+
+    await combo.save();
+
+    res.json({
+      success: true,
+      message: "Combo soft deleted",
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: error.message,
+    });
+  }
+};
+
+const toggleComboStatus = async (req, res) => {
+  try {
+    console.log("...............", req.params.id)
+    const { isActive } = req.body;
+
+    const combo = await Combo.findOne({
+      _id: req.params.id,
+      isDeleted: false,
+    });
 
     if (!combo) {
       return res.status(404).json({
@@ -146,9 +185,44 @@ const deleteCombo = async (req, res) => {
       });
     }
 
+    combo.isActive = isActive;
+
+    await combo.save();
+
     res.json({
       success: true,
-      message: "Combo deleted successfully",
+      message: "Status updated",
+      data: combo,
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: error.message,
+    });
+  }
+};
+
+const restoreCombo = async (req, res) => {
+  try {
+    const combo = await Combo.findById(req.params.id);
+
+    if (!combo || !combo.isDeleted) {
+      return res.status(404).json({
+        success: false,
+        message: "Combo not found or not deleted",
+      });
+    }
+
+    combo.isDeleted = false;
+    combo.deletedAt = null;
+    combo.isActive = true;
+
+    await combo.save();
+
+    res.json({
+      success: true,
+      message: "Combo restored successfully",
+      data: combo,
     });
   } catch (error) {
     res.status(500).json({
@@ -163,4 +237,7 @@ module.exports = {
   getCombos,
   updateCombo,
   deleteCombo,
+  toggleComboStatus,
+  restoreCombo,
+
 };
