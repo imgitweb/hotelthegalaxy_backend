@@ -1,7 +1,7 @@
 const express = require("express");
 const router = express.Router();
 
-const adminAuth = require("../../middleware/adminAuth");
+const { adminAuth, authorizeRoles } = require("../../middleware/adminAuth");
 const validate = require("../../middleware/validate");
 
 const SubCategoryController = require("../../controllers/admin/subCategoryController");
@@ -12,6 +12,7 @@ const {
 } = require("../../validations/dining/subCategoryValidation");
 
 router.use(adminAuth);
+router.use(authorizeRoles("admin", "manager"));
 
 router
   .route("/subcategories")

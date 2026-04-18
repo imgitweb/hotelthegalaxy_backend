@@ -93,14 +93,11 @@ const isLate = (date) => {
 
 
 
-// ─────────────────────────────────────────────────────────────────────────────
-// POST /api/attendance/mark-attendance
-// ─────────────────────────────────────────────────────────────────────────────
+// 1. Mark Attendance (Start of Day)
 exports.markAttendance = async (req, res) => {
   try {
     const { qrData, lat, lng, deviceId, role } = req.body;
 
-    // 1. User ID extract karna (Check all possible auth sources)
     const userId = req.riderId || req.staff?.id || req.user?.id || req.user?._id || req.user?.riderId;
 
     if (!userId) {
@@ -111,23 +108,19 @@ exports.markAttendance = async (req, res) => {
       return res.status(400).json({ success: false, message: "Photo is required" });
     }
 
-    // QR Verification from .env
     if (qrData !== process.env.QR_ID) {
       return res.status(400).json({ success: false, message: "Invalid QR Code" });
     }
 
-    // 2. Role define karna (Case-insensitive check)
-    // Agar frontend se role nahi aa raha toh token ke data se detect karein
     let finalRole = "Staff";
     if (role?.toLowerCase() === "rider" || req.riderId || req.user?.riderId) {
       finalRole = "Rider";
     }
 
     const now = new Date();
-    const dateString = todayStr();
+    // ✅ Fix: Use standard Date string format to avoid missing helper function errors
+    const dateString = now.toLocaleDateString("en-CA"); 
 
-    // 3. Create the Attendance Document
-    // Note: status hamesha "Present" rahega as per your request
     const newAttendance = new attendance({
       staffId: userId,
       role: finalRole, 
@@ -137,20 +130,24 @@ exports.markAttendance = async (req, res) => {
       photo: `/uploads/${finalRole.toLowerCase()}/${req.file.filename}`,
       deviceId: deviceId || "unknown",
       status: "Present", 
+      // ✅ Log initial check-in and automatic "Available" status
+      dutyLogs: [
+        { action: "CheckIn", time: now },
+        { action: "Available", time: now }
+      ]
     });
 
     await newAttendance.save();
 
-    // 4. Update the respective model (Rider or Staff)
     if (finalRole === "Rider") {
       await Rider.findByIdAndUpdate(userId, { 
         lastAttendanceAt: now,
-        status: "Available" // Rider becomes online for orders
+        status: "Available" 
       });
     } else {
       await Staff.findByIdAndUpdate(userId, { 
         lastAttendanceAt: now,
-        status: "Available" // Optional: update staff status if you have a field
+        status: "Available" 
       });
     }
 
@@ -161,30 +158,50 @@ exports.markAttendance = async (req, res) => {
     });
 
   } catch (error) {
-    // 5. Handle Duplicate Key Error (Unique compound index on staffId + date)
     if (error.code === 11000) {
       return res.status(400).json({ 
         success: false, 
         message: "Aapki attendance aaj ke liye pehle hi lag chuki hai!" 
       });
     }
-
     console.error("markAttendance error:", error);
     return res.status(500).json({ success: false, message: "Internal Server Error" });
   }
 };
 
-exports.toggleRiderStatus = async (req, res) => {
+// 2. Toggle Status (Track Online/Offline timestamps)
+exports.toggleDutyStatus = async (req, res) => {
   try {
-    const { status } = req.body; // Expects "Available" or "Offline"
-    const riderId = req.user?.riderId;
-    console.log(".......................this is rider id .........", riderId) // From auth middleware
+    const { status } = req.body; 
+    console.log("req.body",req.body)
+    const userId = req.riderId || req.staff?.id || req.user?.id || req.user?._id || req.user?.riderId;
+    console.log("kkkkkkkkkkk",userId)
 
     if (!["Available", "Offline"].includes(status)) {
       return res.status(400).json({ success: false, message: "Invalid status" });
     }
 
-    await Rider.findByIdAndUpdate(riderId, { status });
+    const todayStr = new Date().toLocaleDateString("en-CA");
+    
+    // Find today's attendance to push the toggle log
+    const todayAttendance = await attendance.findOne({ staffId: userId, date: todayStr });
+
+    if (!todayAttendance) {
+      return res.status(404).json({ success: false, message: "Please mark your attendance first!" });
+    }
+
+    console.log("gggg",status)
+
+    // ✅ Push the exact time the user toggled their status
+    todayAttendance.dutyLogs.push({ action: status, time: new Date() });
+    await todayAttendance.save();
+
+    // Dynamically update either Rider or Staff collection based on their role
+    if (todayAttendance.role === "Rider") {
+      await Rider.findByIdAndUpdate(userId, { status });
+    } else {
+      await Staff.findByIdAndUpdate(userId, { status });
+    }
 
     res.json({
       success: true,
@@ -197,13 +214,13 @@ exports.toggleRiderStatus = async (req, res) => {
   }
 };
 
-// 2. Checkout Attendance (End of Day)
+// 3. Checkout Attendance (End of Day)
 exports.checkoutAttendance = async (req, res) => {
   try {
-    const userId = req.riderId;
-    const todayStr = new Date().toLocaleDateString("en-CA");
+    const userId = req.riderId || req.staff?.id || req.user?.id || req.user?._id || req.user?.riderId;
+    const now = new Date();
+    const todayStr = now.toLocaleDateString("en-CA");
 
-    // Aaj ki attendance record find karein
     const todayAttendance = await attendance.findOne({
       staffId: userId,
       date: todayStr,
@@ -216,12 +233,16 @@ exports.checkoutAttendance = async (req, res) => {
       return res.status(400).json({ success: false, message: "Already checked out." });
     }
 
-    // Mark check-out time
-    todayAttendance.checkOutTime = new Date();
+    // ✅ Set checkout time and log the event
+    todayAttendance.checkOutTime = now;
+    todayAttendance.dutyLogs.push({ action: "CheckOut", time: now });
     await todayAttendance.save();
 
-    // Rider ko force Offline mark karein
-    await Rider.findByIdAndUpdate(userId, { status: "Offline" });
+    if (todayAttendance.role === "Rider") {
+      await Rider.findByIdAndUpdate(userId, { status: "Offline" });
+    } else {
+      await Staff.findByIdAndUpdate(userId, { status: "Offline" });
+    }
 
     return res.status(200).json({
       success: true,
@@ -233,6 +254,149 @@ exports.checkoutAttendance = async (req, res) => {
     return res.status(500).json({ success: false, message: "Internal Server Error" });
   }
 };
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// POST /api/attendance/mark-attendance
+// ─────────────────────────────────────────────────────────────────────────────
+// exports.markAttendance = async (req, res) => {
+//   try {
+//     const { qrData, lat, lng, deviceId, role } = req.body;
+
+//     // 1. User ID extract karna (Check all possible auth sources)
+//     const userId = req.riderId || req.staff?.id || req.user?.id || req.user?._id || req.user?.riderId;
+
+//     if (!userId) {
+//       return res.status(401).json({ success: false, message: "Unauthorized: User ID not found" });
+//     }
+
+//     if (!req.file) {
+//       return res.status(400).json({ success: false, message: "Photo is required" });
+//     }
+
+//     // QR Verification from .env
+//     if (qrData !== process.env.QR_ID) {
+//       return res.status(400).json({ success: false, message: "Invalid QR Code" });
+//     }
+
+//     // 2. Role define karna (Case-insensitive check)
+//     // Agar frontend se role nahi aa raha toh token ke data se detect karein
+//     let finalRole = "Staff";
+//     if (role?.toLowerCase() === "rider" || req.riderId || req.user?.riderId) {
+//       finalRole = "Rider";
+//     }
+
+//     const now = new Date();
+//     const dateString = todayStr();
+
+//     // 3. Create the Attendance Document
+//     // Note: status hamesha "Present" rahega as per your request
+//     const newAttendance = new attendance({
+//       staffId: userId,
+//       role: finalRole, 
+//       date: dateString,
+//       checkInTime: now,
+//       location: { lat: parseFloat(lat), lng: parseFloat(lng) },
+//       photo: `/uploads/${finalRole.toLowerCase()}/${req.file.filename}`,
+//       deviceId: deviceId || "unknown",
+//       status: "Present", 
+//     });
+
+//     await newAttendance.save();
+
+//     // 4. Update the respective model (Rider or Staff)
+//     if (finalRole === "Rider") {
+//       await Rider.findByIdAndUpdate(userId, { 
+//         lastAttendanceAt: now,
+//         status: "Available" // Rider becomes online for orders
+//       });
+//     } else {
+//       await Staff.findByIdAndUpdate(userId, { 
+//         lastAttendanceAt: now,
+//         status: "Available" // Optional: update staff status if you have a field
+//       });
+//     }
+
+//     return res.status(200).json({
+//       success: true,
+//       message: `Attendance marked successfully for ${finalRole} ✅`,
+//       data: newAttendance,
+//     });
+
+//   } catch (error) {
+//     // 5. Handle Duplicate Key Error (Unique compound index on staffId + date)
+//     if (error.code === 11000) {
+//       return res.status(400).json({ 
+//         success: false, 
+//         message: "Aapki attendance aaj ke liye pehle hi lag chuki hai!" 
+//       });
+//     }
+
+//     console.error("markAttendance error:", error);
+//     return res.status(500).json({ success: false, message: "Internal Server Error" });
+//   }
+// };
+
+// exports.toggleRiderStatus = async (req, res) => {
+//   try {
+//     const { status } = req.body; // Expects "Available" or "Offline"
+//     const riderId = req.user?.riderId;
+//     console.log(".......................this is rider id .........", riderId) // From auth middleware
+
+//     if (!["Available", "Offline"].includes(status)) {
+//       return res.status(400).json({ success: false, message: "Invalid status" });
+//     }
+
+//     await Rider.findByIdAndUpdate(riderId, { status });
+
+//     res.json({
+//       success: true,
+//       message: `Duty status changed to ${status}`,
+//       status
+//     });
+//   } catch (error) {
+//     console.error("Toggle Status Error:", error);
+//     res.status(500).json({ success: false, message: "Server Error" });
+//   }
+// };
+
+// // 2. Checkout Attendance (End of Day)
+// exports.checkoutAttendance = async (req, res) => {
+//   try {
+//     const userId = req.riderId || req.staff?.id || req.user?.id || req.user?._id || req.user?.riderId;
+//     console.log("userId.........",userId)
+//     const todayStr = new Date().toLocaleDateString("en-CA");
+
+//     // Aaj ki attendance record find karein
+//     const todayAttendance = await attendance.findOne({
+//       staffId: userId,
+//       date: todayStr,
+//     });
+
+//     if (!todayAttendance) {
+//       return res.status(404).json({ success: false, message: "Attendance not found for today." });
+//     }
+//     if (todayAttendance.checkOutTime) {
+//       return res.status(400).json({ success: false, message: "Already checked out." });
+//     }
+
+//     // Mark check-out time
+//     todayAttendance.checkOutTime = new Date();
+//     await todayAttendance.save();
+
+//     // Rider ko force Offline mark karein
+//     await Rider.findByIdAndUpdate(userId, { status: "Offline" });
+
+//     return res.status(200).json({
+//       success: true,
+//       message: "Shift ended successfully.",
+//       data: todayAttendance,
+//     });
+//   } catch (error) {
+//     console.error("checkoutAttendance error:", error);
+//     return res.status(500).json({ success: false, message: "Internal Server Error" });
+//   }
+// };
 
 // ─────────────────────────────────────────────────────────────────────────────
 // POST /api/attendance/check-out
@@ -595,74 +759,163 @@ exports.getMonthly = async (req, res) => {
 // ==========================================
 // 2. GET ATTENDANCE STATS (Naya Function)
 // ==========================================
+// exports.getMyAttendanceStats = async (req, res) => {
+//   try {
+//     console.log("..................",req.user)
+//     const staffId = req.user?.id || req.staff?.id || req.user?._id || req.user?.riderId
+//     const { month } = req.query;
+//     console.log("hhh ....................." ,req.query) // Format expected: "YYYY-MM"
+
+//     if (!staffId) {
+//       return res.status(401).json({ message: "Unauthorized" });
+//     }
+
+//     // Determine target month and year
+//     let targetDate = new Date();
+//     if (month) {
+//       targetDate = new Date(`${month}-01`);
+//     }
+    
+//     const y = targetDate.getFullYear();
+//     const m = targetDate.getMonth() + 1;
+//     const monthPrefix = `${y}-${m.toString().padStart(2, '0')}`; // e.g. "2026-04"
+
+//     // Fetch all attendance for this staff in the selected month
+//     const records = await attendance.find({
+//       staffId: staffId,
+//       date: { $regex: `^${monthPrefix}` } // Matches dates starting with "YYYY-MM"
+//     }).sort({ checkInTime: -1 });
+
+//     let presentCount = 0;
+//     let lateCount = 0;
+
+//     records.forEach(record => {
+//       if (record.status === "Present") presentCount++;
+      
+//       // Calculate Late Marks (Agar 10:15 AM ke baad aaya to late)
+//       const checkInHour = new Date(record.checkInTime).getHours();
+//       const checkInMin = new Date(record.checkInTime).getMinutes();
+//       if (checkInHour > 10 || (checkInHour === 10 && checkInMin > 15)) {
+//         lateCount++;
+//       }
+//     });
+
+//     // Calculate Absent Days
+//     const today = new Date();
+//     let daysPassedInMonth = 0;
+
+//     if (y === today.getFullYear() && (m - 1) === today.getMonth()) {
+//       daysPassedInMonth = today.getDate(); // Current month
+//     } else {
+//       daysPassedInMonth = new Date(y, m, 0).getDate(); // Past month total days
+//     }
+
+//     // Absent = Total days passed - Present Days
+//     let absentCount = daysPassedInMonth - presentCount;
+//     if (absentCount < 0) absentCount = 0; // Fallback
+
+//     // Define Performance Status
+//     let performance = "Excellent";
+//     if (lateCount > 3 || absentCount > 3) performance = "Average";
+//     if (lateCount > 6 || absentCount > 6) performance = "Poor";
+
+//     return res.status(200).json({
+//       success: true,
+//       stats: {
+//         totalDays: daysPassedInMonth,
+//         present: presentCount,
+//         absent: absentCount,
+//         late: lateCount,
+//         status: performance,
+//         recentLogs: records.slice(0, 5) // Send only the last 5 logs for the table
+//       }
+//     });
+
+//   } catch (error) {
+//     console.error("Fetch Stats Error:", error);
+//     return res.status(500).json({ success: false, message: "Error fetching stats" });
+//   }
+// };
+
 exports.getMyAttendanceStats = async (req, res) => {
   try {
-    console.log("..................",req.user)
-    const staffId = req.user?.id || req.staff?.id || req.user?._id || req.user?.riderId
-    const { month } = req.query; // Format expected: "YYYY-MM"
+    const staffId = req.user?.id || req.staff?.id || req.user?._id || req.user?.riderId;
+    const { month } = req.query; // Expected: "YYYY-MM"
 
     if (!staffId) {
       return res.status(401).json({ message: "Unauthorized" });
     }
 
-    // Determine target month and year
     let targetDate = new Date();
     if (month) {
       targetDate = new Date(`${month}-01`);
     }
-    
+
     const y = targetDate.getFullYear();
     const m = targetDate.getMonth() + 1;
-    const monthPrefix = `${y}-${m.toString().padStart(2, '0')}`; // e.g. "2026-04"
+    const monthPrefix = `${y}-${m.toString().padStart(2, '0')}`;
 
-    // Fetch all attendance for this staff in the selected month
     const records = await attendance.find({
       staffId: staffId,
-      date: { $regex: `^${monthPrefix}` } // Matches dates starting with "YYYY-MM"
-    }).sort({ checkInTime: -1 });
+      date: { $regex: `^${monthPrefix}` }
+    }).sort({ date: -1 });
 
-    let presentCount = 0;
-    let lateCount = 0;
+    const processedRecords = records.map(record => {
+      let totalWorkingMs = 0;
+      let logs = record.dutyLogs || [];
 
-    records.forEach(record => {
-      if (record.status === "Present") presentCount++;
-      
-      // Calculate Late Marks (Agar 10:15 AM ke baad aaya to late)
-      const checkInHour = new Date(record.checkInTime).getHours();
-      const checkInMin = new Date(record.checkInTime).getMinutes();
-      if (checkInHour > 10 || (checkInHour === 10 && checkInMin > 15)) {
-        lateCount++;
+      // Logic: Calculate time between 'Available' and ('Offline' or 'CheckOut')
+      for (let i = 0; i < logs.length; i++) {
+        if (logs[i].action === "Available") {
+          let startTime = new Date(logs[i].time).getTime();
+          let endTime = null;
+
+          // Find the next Offline or CheckOut
+          for (let j = i + 1; j < logs.length; j++) {
+            if (logs[j].action === "Offline" || logs[j].action === "CheckOut") {
+              endTime = new Date(logs[j].time).getTime();
+              i = j; // Move outer loop index
+              break;
+            }
+          }
+
+          // If currently 'Available' but no 'Offline/CheckOut' yet (Ongoing shift)
+          if (!endTime && record.date === new Date().toLocaleDateString("en-CA")) {
+             // Optional: endTime = Date.now(); // Uncomment to show live running hours
+          }
+
+          if (startTime && endTime) {
+            totalWorkingMs += (endTime - startTime);
+          }
+        }
       }
+
+      // Convert MS to Hours and Minutes
+      const hours = Math.floor(totalWorkingMs / (1000 * 60 * 60));
+      const minutes = Math.floor((totalWorkingMs % (1000 * 60 * 60)) / (1000 * 60));
+
+      return {
+        ...record._doc,
+        workingHoursStr: `${hours}h ${minutes}m`,
+        totalMinutes: (hours * 60) + minutes
+      };
     });
 
-    // Calculate Absent Days
+    const presentCount = processedRecords.length;
     const today = new Date();
-    let daysPassedInMonth = 0;
+    let daysPassedInMonth = (y === today.getFullYear() && (m - 1) === today.getMonth()) 
+        ? today.getDate() 
+        : new Date(y, m, 0).getDate();
 
-    if (y === today.getFullYear() && (m - 1) === today.getMonth()) {
-      daysPassedInMonth = today.getDate(); // Current month
-    } else {
-      daysPassedInMonth = new Date(y, m, 0).getDate(); // Past month total days
-    }
-
-    // Absent = Total days passed - Present Days
-    let absentCount = daysPassedInMonth - presentCount;
-    if (absentCount < 0) absentCount = 0; // Fallback
-
-    // Define Performance Status
-    let performance = "Excellent";
-    if (lateCount > 3 || absentCount > 3) performance = "Average";
-    if (lateCount > 6 || absentCount > 6) performance = "Poor";
+    let absentCount = Math.max(0, daysPassedInMonth - presentCount);
 
     return res.status(200).json({
       success: true,
       stats: {
-        totalDays: daysPassedInMonth,
         present: presentCount,
         absent: absentCount,
-        late: lateCount,
-        status: performance,
-        recentLogs: records.slice(0, 5) // Send only the last 5 logs for the table
+        status: absentCount <= 2 ? "Excellent" : absentCount <= 5 ? "Average" : "Poor",
+        recentLogs: processedRecords // Frontend will display workingHoursStr from here
       }
     });
 
