@@ -41,6 +41,9 @@ const staffAttendance = require("./routes/staffAuthRoutes")
 const adminSettingRoutes = require("./routes/adminSettingRoutes")
 const attendanceRoutes = require("./routes/attendanceRoutes");
 const deliverySettingRoutes = require("./routes/admin/deliverySettingRoutes")
+
+
+const couponRoutes = require("./routes/couponRoutes.js").default;
 const path = require("path");
 const router = require("express").Router();
 const app = express();
@@ -145,7 +148,7 @@ app.use("/api/v1/staffAttendance",staffAttendance);
 app.use("/api/v1/admin/staff", staffRoutes);
 app.use("/api/v1/settings", deliverySettingRoutes)
 // Yeh add karo 👇
-
+app.use("/api/v1/admin/coupons", couponRoutes);
 app.use("/api/v1/admin/attendance", attendanceRoutes);
 
 app.use(
@@ -162,3 +165,5 @@ app.use(errorHandler);
 app.use(mongoSanitize());
 app.use(xss());
 module.exports = app;
+
+
