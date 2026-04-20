@@ -10,9 +10,15 @@ const { sendTextMessage, sendInteractiveMessage } = require("../langraph/service
 const { generateOTP, hashOTP } = require("../utils/otp");
 const { sendAuthTemplate } = require("../utils/whatsaap/sendAuthTemplate");
 
+
+const  {CouponUsage} =  require("../models/couponUsageModel.js");
+const {Coupon} =  require("../models/couponModel.js")
+
+
 exports.createOrder = async (req, res, next) => {
   try {
-    const { items, addressId, noContact, total } = req.body;
+    const { items, addressId, noContact, total, couponCode ,couponDiscount = 0 } = req.body;
+    console.log("this is order data ", req.body);
     const userId = req.userId;
 
     if (!items || items.length === 0) {
@@ -99,6 +105,25 @@ exports.createOrder = async (req, res, next) => {
 
     const savedOrder = await newOrder.save();
 
+   const couponDoc = await Coupon.findOne({ code: couponCode });
+
+console.log("Coupon Code:", couponCode);
+console.log("Coupon Doc:", couponDoc);
+
+if (couponDoc && couponCode) {
+  const usage = await CouponUsage.create({
+    coupon: couponDoc._id,
+    user: userId,
+    orderId: savedOrder._id, // ✅ FIXED
+    discountApplied: couponDiscount,
+  });
+
+  console.log("CouponUsage Saved:", usage);
+} else {
+  console.log("Coupon NOT FOUND ❌");
+}
+
+ 
     let razorpayOrder;
     try {
       razorpayOrder = await razorpay.orders.create({
