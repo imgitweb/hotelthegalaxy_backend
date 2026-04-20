@@ -592,6 +592,7 @@ async function actionExecutionNode(state) {
       break;
     }
 
+    // 🔥 FIX: Direct Tracking URL injected inside chat!
     case "TRACK_ORDER": {
       const activeOrders = await getActiveOrdersToday(user._id);
       
@@ -622,8 +623,11 @@ async function actionExecutionNode(state) {
             }
 
             if (orderStatus !== "pending" && order.paymentStatus !== "pending") {
-                if (["dispatched", "out_for_delivery"].includes(orderStatus) && order.deliveryBoy) { 
-                  replyText += `🛵 Rider: ${order.deliveryBoy.name || "Executive"} (📞 ${order.deliveryBoy.phone})\n`; 
+                if (["dispatched", "out_for_delivery"].includes(orderStatus) && order.rider) { 
+                  replyText += `🛵 Rider: ${order.rider.name || "Executive"} (📞 ${order.rider.phone})\n`; 
+                  // 🔥 NEW: Direct URL inside chat for tracking
+                  const trackingUrl = `https://uat.hotelthegalaxy.in/track-order/${order._id}`;
+                  replyText += `📍 *Track Here:* ${trackingUrl}\n`;
                 } else { 
                   replyText += `👨‍🍳 Humare chefs preparation kar rahe hain.\n`; 
                 }
@@ -651,7 +655,6 @@ async function actionExecutionNode(state) {
       break;
     }
 
-    // 🔥 FIX: 'undefined' Price Bug Resolution
     case "VIEW_PENDING_ORDERS": {
       const pendingOrders = await getPendingOrders(user._id);
       
@@ -663,11 +666,10 @@ async function actionExecutionNode(state) {
         
         const rows = pendingOrders.slice(0, 10).map((ord, idx) => {
             const itemsStr = ord.items.map(i => `${i.quantity}x ${i.name}`).join(", ");
-            // Fallback for old orders where totalAmount wasn't at the root
             const ordAmount = ord.totalAmount || ord.pricing?.total || 0; 
             return {
                 id: `pay_ord_${ord._id}`,
-                title: `Order ${idx + 1} - ₹${ordAmount}`, // Now it will correctly show the price
+                title: `Order ${idx + 1} - ₹${ordAmount}`, 
                 description: itemsStr.substring(0, 72)
             };
         });
@@ -685,7 +687,6 @@ async function actionExecutionNode(state) {
       break;
     }
 
-    // 🔥 FIX: Check both totalAmount and pricing.total just in case
     case "PAY_SPECIFIC_ORDER": {
       const orderIdToPay = aiData?.order_id;
       const paymentUrl = await getPaymentLinkByOrderId(orderIdToPay);

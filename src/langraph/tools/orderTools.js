@@ -11,8 +11,9 @@ const razorpay = require("../../config/razorpay");
 const SubCategory = require("../../models/dining/SubCategory"); 
 const Setting = require("../../models/Setting"); 
 const Combo = require("../../models/dining/combomodel"); 
-const Rider = require("../../models/rider.model")
-const Trip = require("../../models/TripModel")
+const Rider = require("../../models/rider.model");
+const Trip = require("../../models/TripModel");
+const Availability = require("../../models/availabilityModel"); // 🔥 NEW
 const mongoose = require("mongoose");
 const axios = require("axios");
 
@@ -28,10 +29,43 @@ function calculateDistance(lat1, lon1, lat2, lon2) {
   return R * c; 
 }
 
+// 🔥 NAYA: Kitchen Availability Logic
+async function getAvailabilityStatus() {
+  try {
+    const avail = await Availability.findOne() || {};
+    const isEnabled = avail.isOrderingEnabled !== false;
+    const isTempClosed = avail.isTemporarilyClosed === true;
+    const start = avail.kitchenStartTime || "10:00";
+    const end = avail.kitchenEndTime || "22:00";
+    const reason = avail.reason || "Restaurant is closed right now.";
+
+    const pureVegMsg = "🌱 100% Pure Veg Kitchen";
+    const timeMsg = `🕒 Timings: ${start} to ${end}\n${pureVegMsg}`;
+
+    if (!isEnabled || isTempClosed) {
+        return { isOpen: false, message: `⚠️ *Currently Closed*\n${reason}\n\n${timeMsg}` };
+    }
+
+    const now = new Date();
+    const formatter = new Intl.DateTimeFormat('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', hour12: false });
+    const currentTimeStr = formatter.format(now);
+
+    if (currentTimeStr < start || currentTimeStr > end) {
+        return { isOpen: false, message: `⚠️ *Kitchen is Closed*\n\n${timeMsg}` };
+    }
+
+    return { isOpen: true, message: `🟢 *Kitchen is Open*\n${timeMsg}` };
+  } catch (e) {
+    return { isOpen: true, message: "🌱 100% Pure Veg Kitchen" };
+  }
+}
+
+// 🔥 FIX: Max Distance checked dynamically from Setting
 async function verifyDeliveryLocation(area, landmark) {
   try {
     const GOOGLE_API_KEY = process.env.GOOGLE_MAPS_API_KEY;
-    const MAX_DISTANCE_KM = parseFloat(process.env.MAX_DISTANCE_KM) || 6;
+    const setting = await Setting.findOne() || {};
+    const MAX_DISTANCE_KM = setting.maxDeliveryDistance || 6;
     const HOTEL_LAT = process.env.HOTEL_LAT || 22.061401;
     const HOTEL_LNG = process.env.HOTEL_LNG || 78.94776;
 
@@ -67,7 +101,8 @@ async function verifyDeliveryLocation(area, landmark) {
 async function verifyLocationByCoords(lat, lng) {
   try {
     const GOOGLE_API_KEY = process.env.GOOGLE_MAPS_API_KEY;
-    const MAX_DISTANCE_KM = parseFloat(process.env.MAX_DISTANCE_KM) || 6;
+    const setting = await Setting.findOne() || {};
+    const MAX_DISTANCE_KM = setting.maxDeliveryDistance || 6;
     const HOTEL_LAT = process.env.HOTEL_LAT || 22.061401;
     const HOTEL_LNG = process.env.HOTEL_LNG || 78.94776;
 
@@ -117,9 +152,7 @@ async function getActiveOrdersToday(userId) {
         user: userId, 
         createdAt: { $gte: today },
         status: { $nin: ["delivered", "cancelled", "rejected"] } 
-    })
-    .populate("rider", "name phone vehicleNumber") 
-    .sort({ createdAt: -1 }).lean();
+    }).populate("rider", "name phone vehicleNumber").sort({ createdAt: -1 }).lean();
 
     const validOrders = [];
     const now = new Date();
@@ -127,7 +160,6 @@ async function getActiveOrdersToday(userId) {
     for (let order of orders) {
         if (order.status === "pending" || order.paymentStatus === "pending") {
             const diffMins = (now - new Date(order.createdAt)) / (1000 * 60);
-            
             if (diffMins > 5) {
                 await Order.findByIdAndUpdate(order._id, { status: "rejected", paymentStatus: "failed" });
                 continue; 
@@ -169,7 +201,7 @@ async function getPaymentLinkByOrderId(orderId) {
 
 async function getCategories() { 
   const cats = await Category.find({ isActive: true }).lean(); 
-  const comboCount = await Combo.countDocuments({});
+  const comboCount = await Combo.countDocuments({ isActive: true }); // 🔥 CHECK ACTIVE
   if (comboCount > 0) {
     cats.unshift({ _id: "combos_virtual", name: "Special Combos" });
   }
@@ -187,7 +219,7 @@ async function getTodayRosterItems() {
     startOfToday.setUTCHours(0, 0, 0, 0);
 
     activeOffers = await Offer.find({ 
-        isActive: true,
+        isActive: true, // 🔥 CHECK ACTIVE
         startDate: { $lte: now }, 
         endDate: { $gte: startOfToday }
     }).lean();
@@ -230,7 +262,7 @@ async function getTodayRosterItems() {
   }
 
   try {
-      const combos = await Combo.find({}).populate("items.item", "name").lean();
+      const combos = await Combo.find({ isActive: true }).populate("items.item", "name").lean(); // 🔥 CHECK ACTIVE
       
       const comboItems = combos.map(c => {
          let originalPrice = c.price;
@@ -341,7 +373,7 @@ async function saveNewAddress(userId, addressData, lat, lng) {
 
 async function addItemsToCart(phone, items) { 
   const session = await getOrCreateSession(phone); const rosterItems = await getTodayRosterItems(); let feedbackMessages = []; 
-  const setting = await Setting.findOne() || { baseFee: 30, freeDeliveryAbove: 500 }; 
+  const setting = await Setting.findOne() || {}; 
 
   for (const it of items) {
     const name = String(it.name || "").toLowerCase(); const qtyRequested = Math.max(1, parseInt(it.quantity || it.qty || 1));
@@ -383,7 +415,7 @@ async function addItemsToCart(phone, items) {
 
 async function removeItemsFromCart(phone, items) { 
   const session = await getOrCreateSession(phone); 
-  const setting = await Setting.findOne() || { baseFee: 30, freeDeliveryAbove: 500 }; 
+  const setting = await Setting.findOne() || {}; 
   if (!session.cart || session.cart.length === 0) return { cart: session.cart, setting }; 
 
   for (const it of items) {
@@ -402,28 +434,8 @@ async function removeItemsFromCart(phone, items) {
 }
 
 async function placeOrder(phone, paymentMethod) {
-  let user = await checkUserExists(phone); if (!user) user = await registerNewUser(phone, "Guest"); 
-  const session = await getOrCreateSession(phone); let selectedAddress = null;
-  if (session.addressId) { selectedAddress = await Address.findById(session.addressId); }
-  const subtotal = session.cart.reduce((sum, item) => sum + item.total, 0);
-  
-  const setting = await Setting.findOne() || { baseFee: 30, freeDeliveryAbove: 500 }; 
-  const deliveryCharge = subtotal >= setting.freeDeliveryAbove ? 0 : setting.baseFee;
-  const total = subtotal + deliveryCharge; 
-  
-  const phoneLast4 = phone ? String(phone).slice(-4) : "0000";
-  const orderCount = await Order.countDocuments({ user: user._id });
-  const sequence = String(orderCount + 1).padStart(4, '0');
-  const orderNumber = `ORD-WH-${phoneLast4}-${sequence}`;
-  
-  const newOrder = await Order.create({
-    orderNumber: orderNumber, user: user._id, items: session.cart, 
-    pricing: { subtotal, deliveryCharge, tax: 0, total }, 
-    address: { fullName: user.fullName || "WhatsApp User", phone: phone, street: selectedAddress ? selectedAddress.street : "Store Pickup", landmark: selectedAddress ? selectedAddress.landmark : "", city: "Madhya Pradesh" },
-    payment: { method: paymentMethod, status: paymentMethod === "ONLINE" ? "paid" : "pending" }, status: "pending",
-  });
-  session.step = "HOME"; session.cart = []; session.addressId = null; await session.save();
-  return newOrder;
+  // Legacy bypass, not heavily used directly via graph anymore since we process via processBotOrderAndPayment
+  return null; 
 }
 
 async function cancelOrder(userId) { 
@@ -444,6 +456,7 @@ async function getUserOrderStats(userId) {
   } catch (error) { return { totalOrders: 0, deliveredOrders: 0, cancelledOrders: 0, totalSpent: 0 }; }
 }
 
+// 🔥 FIX: Strict GST and Delivery Logic
 async function processBotOrderAndPayment(userId, phone, cartItems, addressId, distanceKm = null) { 
   try {
     const fullAddress = await Address.findById(addressId); if (!fullAddress) return { success: false };
@@ -456,20 +469,28 @@ async function processBotOrderAndPayment(userId, phone, cartItems, addressId, di
     }
     finalDistance = Math.round(finalDistance * 100) / 100;
 
-    const setting = await Setting.findOne() || { baseFee: 30, perKmRate: 10, baseDistanceKm: 5, minCharge: 20, maxCharge: 200, freeDeliveryAbove: 500 };
+    const setting = await Setting.findOne() || {};
+    const dCharge = setting.deliveryCharge || { freeDeliveryAbove: 500, isFreeDelivery: false, baseDistance: 5, baseFee: 30, extraPerKmRate: 10, minCharge: 20, maxCharge: 200 };
+    const gstSet = setting.gst || { foodGSTPercent: 5, deliveryGSTPercent: 5 };
+
     const subtotal = cartItems.reduce((sum, item) => sum + item.total, 0); 
     
     let deliveryCharge = 0;
-    if (subtotal < setting.freeDeliveryAbove) {
-      deliveryCharge = setting.baseFee;
-      if (finalDistance > setting.baseDistanceKm) {
-        deliveryCharge += (finalDistance - setting.baseDistanceKm) * setting.perKmRate;
+    if (!dCharge.isFreeDelivery && subtotal < (dCharge.freeDeliveryAbove || 500)) {
+      deliveryCharge = dCharge.baseFee || 30;
+      if (finalDistance > (dCharge.baseDistance || 5)) {
+        deliveryCharge += (finalDistance - (dCharge.baseDistance || 5)) * (dCharge.extraPerKmRate || 10);
       }
-      if (deliveryCharge < setting.minCharge) deliveryCharge = setting.minCharge;
-      if (deliveryCharge > setting.maxCharge) deliveryCharge = setting.maxCharge;
+      if (deliveryCharge < (dCharge.minCharge || 20)) deliveryCharge = dCharge.minCharge || 20;
+      if (deliveryCharge > (dCharge.maxCharge || 200)) deliveryCharge = dCharge.maxCharge || 200;
     }
     deliveryCharge = Math.round(deliveryCharge);
-    const totalAmount = subtotal + deliveryCharge;
+    
+    const foodGST = Math.round((subtotal * (gstSet.foodGSTPercent || 0)) / 100);
+    const deliveryGST = Math.round((deliveryCharge * (gstSet.deliveryGSTPercent || 0)) / 100);
+    const totalTax = foodGST + deliveryGST;
+
+    const totalAmount = subtotal + deliveryCharge + totalTax;
 
     const phoneLast4 = phone ? String(phone).slice(-4) : "0000";
     const orderCount = await Order.countDocuments({ user: userId });
@@ -480,7 +501,7 @@ async function processBotOrderAndPayment(userId, phone, cartItems, addressId, di
       orderNumber: uniqueOrderNumber, orderSource: "whatsapp", user: userId,
       items: cartItems.map(item => ({ menuItem: item.isCombo ? null : item.menuItemId, combo: item.isCombo ? item.menuItemId : null, name: item.name, price: item.price || (item.total / item.quantity), quantity: item.quantity, total: item.total })),
       address: { street: fullAddress.street || "Unknown", landmark: fullAddress.landmark || "", label: fullAddress.label || "Home", lat: fullAddress.lat || 0, lng: fullAddress.lng || 0 },
-      pricing: { subtotal: subtotal, deliveryCharge: deliveryCharge, tax: 0, total: totalAmount }, 
+      pricing: { subtotal: subtotal, deliveryCharge: deliveryCharge, tax: totalTax, total: totalAmount }, 
       totalAmount: totalAmount, noContact: false, paymentStatus: "pending", orderStatus: "pending",
       distanceKm: finalDistance, distance: finalDistance
     });
@@ -491,7 +512,7 @@ async function processBotOrderAndPayment(userId, phone, cartItems, addressId, di
     const paymentLink = await razorpay.paymentLink.create(paymentLinkReq);
     await Payment.create({ order: savedOrder._id, amount: totalAmount, gateway: "RAZORPAY", status: "created", metadata: { razorpayOrderId: paymentLink.id, userId: userId, paymentUrl: paymentLink.short_url } });
     
-    return { success: true, orderId: savedOrder._id, paymentUrl: paymentLink.short_url, totalAmount, subtotal, deliveryCharge };
+    return { success: true, orderId: savedOrder._id, paymentUrl: paymentLink.short_url, totalAmount, subtotal, deliveryCharge, tax: totalTax, foodGST, deliveryGST, isFreeDelivery: deliveryCharge === 0 };
   } catch (error) { return { success: false }; }
 }
 
@@ -532,14 +553,14 @@ async function getActiveOffers() {
         endDate: { $gte: startOfToday } 
     }).populate("items", "name basePrice").populate("combos", "name price").lean(); 
     
-    const combos = await Combo.find({}).populate("items.item", "name").lean();
+    const combos = await Combo.find({ isActive: true }).populate("items.item", "name").lean(); // 🔥 CHECK ACTIVE
 
     return { offers, combos };
   } catch (error) { return { offers: [], combos: [] }; }
 }
 
 module.exports = {
-  checkUserExists, registerNewUser, getOrCreateSession, getActiveOrder, getActiveOrdersToday, getPendingOrders, getPaymentLinkByOrderId, getActiveOffers,
+  checkUserExists, registerNewUser, getOrCreateSession, getActiveOrder, getActiveOrdersToday, getPendingOrders, getPaymentLinkByOrderId, getActiveOffers, getAvailabilityStatus, // 🔥 NEW IMPORT
   getCategories, getMenuByCategory, getUserAddresses, getUserOrderStats, getTodayRosterItems, 
   searchTodayRosterItems, getAvailableCategoriesToday, saveNewAddress, addItemsToCart, 
   placeOrder, cancelOrder, removeItemsFromCart, processBotOrderAndPayment, 

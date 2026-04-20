@@ -13,6 +13,7 @@ const Setting = require("../../models/Setting");
 const Combo = require("../../models/dining/combomodel"); 
 const Rider = require("../../models/rider.model")
 const Trip = require("../../models/TripModel")
+const Availability = require("../../models/availabilityModel")
 const mongoose = require("mongoose");
 const axios = require("axios");
 
@@ -117,7 +118,9 @@ async function getActiveOrdersToday(userId) {
         user: userId, 
         createdAt: { $gte: today },
         status: { $nin: ["delivered", "cancelled", "rejected"] } 
-    }).sort({ createdAt: -1 }).lean();
+    })
+    .populate("rider", "name phone vehicleNumber") 
+    .sort({ createdAt: -1 }).lean();
 
     const validOrders = [];
     const now = new Date();

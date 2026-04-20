@@ -1,19 +1,27 @@
-const DeliverySetting = require("../../models/Setting");
+const DeliverySetting = require("../../models/Setting"); // Ensure correct path to your model
 
 // Get settings
 exports.getSettings = async (req, res, next) => {
   try {
     let settings = await DeliverySetting.findOne();
     
-    // Agar database mein setting nahi hai, to default create karein jisme baseDistance bhi ho
+    // Agar database mein setting nahi hai, to naye schema ke default fields ke sath create karein
     if (!settings) {
       settings = await DeliverySetting.create({
-        baseFee: 30,
-        baseDistance: 3, // Default 3 KM
-        perKmRate: 10,
-        minCharge: 20,
-        maxCharge: 200,
-        freeDeliveryAbove: 500,
+        maxDeliveryDistance: 6,
+        deliveryCharge: {
+          isFreeDelivery: false,
+          baseDistance: 5,
+          baseFee: 30,
+          extraPerKmRate: 10,
+          minCharge: 20,
+          maxCharge: 200,
+          freeDeliveryAbove: 500,
+        },
+        gst: {
+          foodGSTPercent: 5,
+          deliveryGSTPercent: 5,
+        }
       });
     }
 
@@ -30,17 +38,15 @@ exports.getSettings = async (req, res, next) => {
 // Update settings
 exports.updateSettings = async (req, res, next) => {
   try {
-    const { baseFee, baseDistance, perKmRate, minCharge, maxCharge, freeDeliveryAbove } = req.body;
+    // Nested data ko destructure kar rahe hain
+    const { maxDeliveryDistance, deliveryCharge, gst } = req.body;
 
     const updatedSettings = await DeliverySetting.findOneAndUpdate(
       {}, 
       {
-        baseFee,
-        baseDistance, // Naya field update ke liye
-        perKmRate,
-        minCharge,
-        maxCharge,
-        freeDeliveryAbove,
+        maxDeliveryDistance,
+        deliveryCharge,
+        gst
       },
       { new: true, upsert: true }
     );
