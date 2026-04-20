@@ -1,6 +1,6 @@
-import express from "express";
+const express = require("express");
 
-import {
+const {
   createCoupon,
   getAllCoupons,
   updateCoupon,
@@ -9,14 +9,14 @@ import {
   getCouponUsageReport,
   getActiveCoupons,
   validateCoupon,
-} from "../controllers/couponController.js";
+} = require("../controllers/couponController.js");
 
-// ✅ CommonJS middleware ko ESM me use karne ka sahi tarika
-import adminAuthPkg from "../middleware/adminAuth.js";
-import userAuthPkg from "../middleware/auth.js";
+// Middleware require setup
+const adminAuthPkg = require("../middleware/adminAuth.js");
+const userAuthPkg = require("../middleware/auth.js");
 
 const { adminAuth } = adminAuthPkg;
-const auth = userAuthPkg;
+const auth = userAuthPkg; // Agar auth file me module.exports direct function hai toh ye sahi kaam karega
 
 const router = express.Router();
 
@@ -32,4 +32,4 @@ router.get("/:id/report", adminAuth, getCouponUsageReport);
 router.get("/coupons", auth, getActiveCoupons);
 router.post("/coupons/validate", auth, validateCoupon);
 
-export default router;
+module.exports = router;

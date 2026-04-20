@@ -43,7 +43,7 @@ const attendanceRoutes = require("./routes/attendanceRoutes");
 const deliverySettingRoutes = require("./routes/admin/deliverySettingRoutes")
 
 
-const couponRoutes = require("./routes/couponRoutes.js").default;
+const couponRoutes = require("./routes/couponRoutes.js");
 const path = require("path");
 const router = require("express").Router();
 const app = express();

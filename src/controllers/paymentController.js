@@ -11,8 +11,8 @@ const { generateOTP, hashOTP } = require("../utils/otp");
 const { sendAuthTemplate } = require("../utils/whatsaap/sendAuthTemplate");
 
 
-const  {CouponUsage} =  require("../models/couponUsageModel.js");
-const {Coupon} =  require("../models/couponModel.js")
+const  CouponUsage =  require("../models/couponUsageModel.js");
+const Coupon =  require("../models/couponModel.js")
 
 
 exports.createOrder = async (req, res, next) => {

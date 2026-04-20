@@ -1,7 +1,7 @@
-import { Coupon } from "../models/couponModel.js";
-import { CouponUsage } from "../models/couponUsageModel.js";
+const Coupon = require("../models/couponModel.js");
+const CouponUsage = require("../models/couponUsageModel.js");
 
-export const createCoupon = async (req, res) => {
+exports.createCoupon = async (req, res) => {
   try {
     const {
       code,
@@ -59,7 +59,7 @@ export const createCoupon = async (req, res) => {
 // ─────────────────────────────────────────────
 // ADMIN: Get all coupons (with usage stats)
 // ─────────────────────────────────────────────
-export const getAllCoupons = async (req, res) => {
+exports.getAllCoupons = async (req, res) => {
   try {
     const coupons = await Coupon.find({ isDeleted: false }).sort({
       createdAt: -1,
@@ -91,7 +91,7 @@ export const getAllCoupons = async (req, res) => {
 // ─────────────────────────────────────────────
 // ADMIN: Update coupon
 // ─────────────────────────────────────────────
-export const updateCoupon = async (req, res) => {
+exports.updateCoupon = async (req, res) => {
   try {
     const { id } = req.params;
 
@@ -120,7 +120,7 @@ export const updateCoupon = async (req, res) => {
 // ─────────────────────────────────────────────
 // ADMIN: Toggle active status
 // ─────────────────────────────────────────────
-export const toggleCoupon = async (req, res) => {
+exports.toggleCoupon = async (req, res) => {
   try {
     const coupon = await Coupon.findById(req.params.id);
     if (!coupon) {
@@ -143,7 +143,7 @@ export const toggleCoupon = async (req, res) => {
 // ─────────────────────────────────────────────
 // ADMIN: Soft delete coupon
 // ─────────────────────────────────────────────
-export const deleteCoupon = async (req, res) => {
+exports.deleteCoupon = async (req, res) => {
   try {
     const coupon = await Coupon.findByIdAndUpdate(
       req.params.id,
@@ -164,7 +164,7 @@ export const deleteCoupon = async (req, res) => {
 // ─────────────────────────────────────────────
 // ADMIN: Usage report for one coupon
 // ─────────────────────────────────────────────
-export const getCouponUsageReport = async (req, res) => {
+exports.getCouponUsageReport = async (req, res) => {
   try {
     const { id } = req.params;
     const usages = await CouponUsage.find({ coupon: id })
@@ -191,7 +191,7 @@ export const getCouponUsageReport = async (req, res) => {
 // ─────────────────────────────────────────────
 // USER: Get all available/active coupons
 // ─────────────────────────────────────────────
-export const getActiveCoupons = async (req, res) => {
+exports.getActiveCoupons = async (req, res) => {
   try {
     const now = new Date();
     const coupons = await Coupon.find({
@@ -210,15 +210,15 @@ export const getActiveCoupons = async (req, res) => {
 };
 
 // ─────────────────────────────────────────────
-// USER: Validate & apply coupon (returns discount amount only, no order yet)
+// USER: Validate & apply coupon
 // ─────────────────────────────────────────────
-export const validateCoupon = async (req, res) => {
+exports.validateCoupon = async (req, res) => {
   try {
-    console.log("coupon.....................",req.body)
+    console.log("coupon.....................", req.body);
     const { code, orderTotal } = req.body;
 
     const userId = req.userId;
-    console.log("coupon.....................",userId)
+    console.log("coupon.....................", userId);
 
     if (!code || !orderTotal) {
       return res

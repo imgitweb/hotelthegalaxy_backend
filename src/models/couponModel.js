@@ -1,4 +1,4 @@
-import mongoose from "mongoose";
+const mongoose = require("mongoose");
 
 const couponSchema = new mongoose.Schema(
   {
@@ -72,5 +72,4 @@ const couponSchema = new mongoose.Schema(
 // Indexes for fast lookup
 couponSchema.index({ code: 1 });
 couponSchema.index({ isActive: 1, isDeleted: 1 });
-
-export const Coupon = mongoose.model("Coupon", couponSchema);
+module.exports = mongoose.model("Coupon", couponSchema);

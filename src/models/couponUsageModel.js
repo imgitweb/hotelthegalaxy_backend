@@ -1,4 +1,4 @@
-import mongoose from "mongoose";
+const mongoose = require("mongoose");
 
 const couponUsageSchema = new mongoose.Schema(
   {
@@ -26,4 +26,4 @@ const couponUsageSchema = new mongoose.Schema(
 
 couponUsageSchema.index({ coupon: 1, user: 1 });
 
-export const CouponUsage = mongoose.model("CouponUsage", couponUsageSchema);
+module.exports = mongoose.model("CouponUsage", couponUsageSchema);
