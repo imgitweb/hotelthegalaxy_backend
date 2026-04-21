@@ -7,7 +7,7 @@ const {
   updateAvailability,
 } = require("../../controllers/availabilityController");
 
-router.get("/", adminAuth, authorizeRoles("admin", "manager"),  getAvailability);
-router.put("/",adminAuth, authorizeRoles("admin", "manager"), updateAvailability); // admin protect later
+router.get("/",  getAvailability);
+router.put("/", updateAvailability); // admin protect later
 
 module.exports = router;
