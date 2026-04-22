@@ -280,6 +280,7 @@ exports.validateCoupon = async (req, res) => {
     console.log(".......................",req.body)
     const { code, orderTotal } = req.body;
     const userId = req.userId;
+    console.log("this is a idddd .......................",userId)
 
     if (!code || !orderTotal) {
       return res.status(400).json({ 

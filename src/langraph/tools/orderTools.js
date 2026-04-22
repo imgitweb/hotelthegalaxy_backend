@@ -19,7 +19,6 @@ const Availability = require("../../models/availabilityModel");
 const mongoose = require("mongoose");
 const axios = require("axios");
 
-// 🔥 NAYA: Strict IST Timezone Helper (Isse Roster/Date ka koi bug nahi aayega)
 function getISTBounds() {
   const now = new Date();
   const istOffset = 5.5 * 60 * 60 * 1000;
@@ -207,39 +206,37 @@ async function getPaymentLinkByOrderId(orderId) {
   } catch (error) { return null; }
 }
 
-// 🔥 FIX: Roster Date Bounds (IST logic)
 async function getTodayRosterItems() { 
-  const today = new Date(); today.setHours(0, 0, 0, 0);
-  const roster = await DailyRoster.findOne({ date: { $gte: today, $lt: new Date(today.getTime() + 24 * 60 * 60 * 1000) } }).populate("items.id"); 
+  const { start, end, now } = getISTBounds();
+
+  const roster = await DailyRoster.findOne({ 
+      date: { $gte: start, $lte: end } 
+  }).populate("items.id").populate("items.item").populate("items.menuItem"); 
   
-  // 🔥 FIX: Agar aaj ka roster update nahi hua hai, toh function yahin ruk jayega (Combos bhi nahi dikhenge)
-  if (!roster || !roster.items || roster.items.length === 0) {
-      return [];
-  }
+  if (!roster || !roster.items || roster.items.length === 0) return []; 
 
   let activeOffers = [];
   try {
-    const now = new Date();
-    const startOfToday = new Date(now);
-    startOfToday.setUTCHours(0, 0, 0, 0);
-
     activeOffers = await Offer.find({ 
-        isActive: true,
+        isActive: true, 
         startDate: { $lte: now }, 
-        endDate: { $gte: startOfToday }
+        endDate: { $gte: start }
     }).lean();
-  } catch(e) { console.error("Offer fetch error:", e); }
+  } catch(e) {}
 
   let items = [];
   
   if (roster && roster.items) {
-    const regularItems = roster.items.filter(item => item.id && item.quantity > 0).map(item => {
-      let originalPrice = item.id.basePrice;
+    const regularItems = roster.items.map(itemObj => {
+      const refItem = itemObj.id || itemObj.item || itemObj.menuItem;
+      if (!refItem || !refItem.name || itemObj.quantity <= 0) return null;
+
+      let originalPrice = refItem.basePrice;
       let finalPrice = originalPrice;
       let appliedOffer = null;
 
       for(let offer of activeOffers) {
-        if (offer.items && offer.items.map(i => String(i)).includes(String(item.id._id))) {
+        if (offer.items && offer.items.map(i => String(i)).includes(String(refItem._id))) {
           if (offer.discountType === "PERCENTAGE") {
             finalPrice = finalPrice - (finalPrice * offer.discountValue / 100);
           } else if (offer.discountType === "FLAT") {
@@ -252,66 +249,66 @@ async function getTodayRosterItems() {
       finalPrice = Math.max(0, Math.round(finalPrice));
 
       return { 
-        _id: item.id._id, 
-        name: item.id.name, 
+        _id: refItem._id, 
+        name: refItem.name, 
         basePrice: finalPrice, 
         originalPrice: originalPrice, 
-        category: item.id.category, 
-        maxAllowed: item.quantity, 
-        availableNow: item.quantity,
+        category: refItem.category, 
+        maxAllowed: itemObj.quantity, 
+        availableNow: itemObj.quantity,
         isCombo: false,
         offerName: appliedOffer
       };
-    });
+    }).filter(Boolean);
     items.push(...regularItems);
   }
 
-  // 📦 Ab Combos wali try-catch tabhi chalegi jab upar wala roster check paas hoga
-  try {
-      const combos = await Combo.find({}).populate("items.item", "name").lean();
-      
-      const comboItems = combos.map(c => {
-         let originalPrice = c.price;
-         let finalPrice = originalPrice;
-         let appliedOffer = null;
+  if (items.length > 0) {
+    try {
+        const combos = await Combo.find({ isActive: true }).populate("items.item", "name").lean();
+        
+        const comboItems = combos.map(c => {
+           let originalPrice = c.price;
+           let finalPrice = originalPrice;
+           let appliedOffer = null;
 
-         for(let offer of activeOffers) {
-           if (offer.combos && offer.combos.map(id => String(id)).includes(String(c._id))) {
-             if (offer.discountType === "PERCENTAGE") {
-               finalPrice = finalPrice - (finalPrice * offer.discountValue / 100);
-             } else if (offer.discountType === "FLAT") {
-               finalPrice = finalPrice - offer.discountValue;
+           for(let offer of activeOffers) {
+             if (offer.combos && offer.combos.map(id => String(id)).includes(String(c._id))) {
+               if (offer.discountType === "PERCENTAGE") {
+                 finalPrice = finalPrice - (finalPrice * offer.discountValue / 100);
+               } else if (offer.discountType === "FLAT") {
+                 finalPrice = finalPrice - offer.discountValue;
+               }
+               appliedOffer = offer.name;
+               break;
              }
-             appliedOffer = offer.name;
-             break;
            }
-         }
-         finalPrice = Math.max(0, Math.round(finalPrice));
+           finalPrice = Math.max(0, Math.round(finalPrice));
 
-         let includedNames = "";
-         if (c.items && c.items.length > 0) {
-             includedNames = c.items.map(i => i.item && i.item.name ? i.item.name : "").filter(Boolean).join(" + ");
-         }
+           let includedNames = "";
+           if (c.items && c.items.length > 0) {
+               includedNames = c.items.map(i => i.item && i.item.name ? i.item.name : "").filter(Boolean).join(" + ");
+           }
 
-         return {
-             _id: c._id,
-             name: `${c.name}`, 
-             basePrice: finalPrice,
-             originalPrice: originalPrice,
-             category: "combos_virtual",
-             maxAllowed: 10, 
-             availableNow: 10,
-             isCombo: true,
-             offerName: appliedOffer,
-             includedItems: includedNames 
-         };
-      });
-      items.push(...comboItems);
-  } catch(e) { console.log("Combo fetch error:", e); }
+           return {
+               _id: c._id,
+               name: `${c.name}`, 
+               basePrice: finalPrice,
+               originalPrice: originalPrice,
+               category: "combos_virtual",
+               maxAllowed: 10, 
+               availableNow: 10,
+               isCombo: true,
+               offerName: appliedOffer,
+               includedItems: includedNames 
+           };
+        });
+        items.push(...comboItems);
+    } catch(e) {}
+  }
 
   return items;
 }
-
 
 async function getCategories() { 
   const rosterItems = await getTodayRosterItems();
@@ -361,7 +358,6 @@ async function getAvailableCategoriesToday() {
 async function getMenuByCategory(categoryId) { 
   try {
     const rosterItems = await getTodayRosterItems();
-    if (!rosterItems.length) return [];
     
     if (categoryId === "combos_virtual") {
        return rosterItems.filter(item => item.isCombo);
@@ -461,7 +457,7 @@ async function addItemsToCart(phone, items) {
   }
   session.markModified('cart'); 
   await session.save(); 
-  return { messages: feedbackMessages }; 
+  return { messages: feedbackMessages, cart: session.cart }; 
 }
 
 async function removeItemsFromCart(phone, items) { 
@@ -622,19 +618,6 @@ async function processBotOrderAndPayment(userId, phone, cartItems, addressId, di
   } catch (error) { return { success: false }; }
 }
 
-
-async function getUserOrderStats(userId) { 
-  try {
-    const orders = await Order.find({ user: userId }); let totalOrders = orders.length; let deliveredOrders = 0; let cancelledOrders = 0; let totalSpent = 0;
-    orders.forEach(order => {
-        const status = order.status ? order.status.toLowerCase() : "";
-        if (status === "delivered") deliveredOrders++; if (status === "cancelled") cancelledOrders++;
-        if (["confirmed", "preparing", "dispatched", "out_for_delivery", "delivered"].includes(status)) { totalSpent += (order.totalAmount || order.pricing?.total || 0); }
-    });
-    return { totalOrders, deliveredOrders, cancelledOrders, totalSpent };
-  } catch (error) { return { totalOrders: 0, deliveredOrders: 0, cancelledOrders: 0, totalSpent: 0 }; }
-}
-
 async function checkLatestPaymentStatus(userId) { 
   try {
     const order = await Order.findOne({ user: userId }).sort({ createdAt: -1 }); if (!order) return { found: false };
@@ -704,6 +687,28 @@ async function cancelOrder(userId) {
   const activeOrder = await getActiveOrder(userId);
   if (activeOrder && ["pending", "preparing", "accepted"].includes(activeOrder.status)) { return await Order.findByIdAndUpdate(activeOrder._id, { status: "cancelled" }, { new: true }); }
   return null; 
+}
+
+// 🔥 FIX: EXPORT YAHAN THEEK KIYA GAYA HAI
+async function getUserOrderStats(userId) { 
+  try {
+    const orders = await Order.find({ user: userId }); 
+    let totalOrders = orders.length; 
+    let deliveredOrders = 0; 
+    let cancelledOrders = 0; 
+    let totalSpent = 0;
+    orders.forEach(order => {
+        const status = order.status ? order.status.toLowerCase() : "";
+        if (status === "delivered") deliveredOrders++; 
+        if (status === "cancelled") cancelledOrders++;
+        if (["confirmed", "preparing", "dispatched", "out_for_delivery", "delivered"].includes(status)) { 
+            totalSpent += (order.totalAmount || order.pricing?.total || 0); 
+        }
+    });
+    return { totalOrders, deliveredOrders, cancelledOrders, totalSpent };
+  } catch (error) { 
+      return { totalOrders: 0, deliveredOrders: 0, cancelledOrders: 0, totalSpent: 0 }; 
+  }
 }
 
 module.exports = {
