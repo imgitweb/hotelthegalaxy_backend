@@ -147,7 +147,7 @@ app.use("/api/v1/rooms", roomRoutes);
 app.use("/api/v1/staffAttendance",staffAttendance);
 app.use("/api/v1/admin/staff", staffRoutes);
 app.use("/api/v1/settings", deliverySettingRoutes)
-// Yeh add karo 👇
+
 app.use("/api/v1/admin/coupons", couponRoutes);
 app.use("/api/v1/admin/attendance", attendanceRoutes);
 

@@ -8,12 +8,21 @@ const lastUpdateMap = new Map();
 const LOCATION_UPDATE_INTERVAL = 5000;
 
 const initSocket = (server) => {
-  io = new Server(server, {
-    cors: {
-      origin: process.env.CLIENT_URL.split(","),
-      credentials: true,
-    },
-  });
+io = new Server(server, {
+  cors: {
+    origin: [
+      "http://localhost:3000",
+      "http://localhost:3002",
+      "http://localhost:5173",
+      "http://127.0.0.1:3000",
+      "https://uat.hotelthegalaxy.in",
+      "https://admin.hotelthegalaxy.in",
+      ...(process.env.CLIENT_URL ? process.env.CLIENT_URL.split(",") : []),
+    ].filter(Boolean),
+    methods: ["GET", "POST"],
+    credentials: true,
+  },
+});
 
   io.on("connection", (socket) => {
     console.log("⚡ Connected:", socket.id);

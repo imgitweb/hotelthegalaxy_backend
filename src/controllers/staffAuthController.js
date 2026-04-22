@@ -6,10 +6,6 @@ const { normalizePhone } = require("../utils/normalizePhone");
 const { sendAuthTemplate } = require("../utils/whatsaap/sendAuthTemplate");
 
 const OTP_EXPIRY = Number(process.env.OTP_EXPIRY_MINUTES || 5) * 60 * 1000;
-
-// ======================
-// 📱 CHECK STAFF STATUS (Naya API)
-// ======================
 exports.checkStaffStatus = async (req, res) => {
   try {
     const { phone } = req.body;

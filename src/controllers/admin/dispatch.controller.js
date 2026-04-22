@@ -1,6 +1,8 @@
 const Order = require("../../models/User/ordersModel");
 
 exports.assignOrdersToRider = async (req, res, next) => {
+
+  console.log("Assign rider method called ")
   try {
     const { riderId, orderIds } = req.body;
 
