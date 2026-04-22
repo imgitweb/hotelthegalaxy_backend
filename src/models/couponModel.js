@@ -9,8 +9,8 @@ const couponSchema = new mongoose.Schema(
       uppercase: true,
       trim: true,
       minlength: 4,
-      maxlength: 6,
-      match: /^[A-Z0-9]{4,6}$/,   // alphanumeric only, 4–6 chars
+      maxlength: 20,     // Updated for bulk prefix + random string
+      match: /^[A-Z0-9]{4,20}$/, // alphanumeric only
     },
     discountType: {
       type: String,
@@ -19,11 +19,11 @@ const couponSchema = new mongoose.Schema(
     },
     discountValue: {
       type: Number,
-      default: 0,        // 0 for free_delivery type
+      default: 0,
     },
     maxDiscountCap: {
       type: Number,
-      default: null,     // optional cap for percentage coupons
+      default: null,
     },
     minOrderValue: {
       type: Number,
@@ -39,7 +39,7 @@ const couponSchema = new mongoose.Schema(
     },
     usageLimit: {
       type: Number,
-      default: null,     // null = unlimited global uses
+      default: null,
     },
     usedCount: {
       type: Number,
@@ -55,7 +55,7 @@ const couponSchema = new mongoose.Schema(
     },
     isDeleted: {
       type: Boolean,
-      default: false,    // soft delete
+      default: false,
     },
     description: {
       type: String,
@@ -63,12 +63,22 @@ const couponSchema = new mongoose.Schema(
     },
     tag: {
       type: String,
-      default: "",       // e.g. "New User", "Flash Deal"
+      default: "",
     },
+    // New fields for Bulk Generation
+    isBulk: {
+      type: Boolean,
+      default: false,
+    },
+    batchId: {
+      type: String,
+      default: null,     // Identifies which bulk action generated this
+    }
   },
   { timestamps: true }
 );
 
-
 couponSchema.index({ isActive: 1, isDeleted: 1 });
+couponSchema.index({ batchId: 1 }); // Index for fast exporting
+
 module.exports = mongoose.model("Coupon", couponSchema);

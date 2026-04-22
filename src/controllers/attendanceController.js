@@ -560,33 +560,45 @@ exports.getStats = async (req, res) => {
 
     // 1. Calculate TOTAL Employees (Staff + Riders)
     const totalStaff = await Staff.countDocuments({ isActive: true, isDeleted: false });
-    const totalRiders = await Rider.countDocuments(); // Assume all valid riders
+    const totalRiders = await Rider.countDocuments(); 
     const totalEmployees = totalStaff + totalRiders;
 
-    // 2. Count by status for the date from Attendance table
+    // 2. Count Present and Total Working Hours for the date
     const agg = await attendance.aggregate([
       { $match: { date } },
-      { $group: { _id: "$status", count: { $sum: 1 } } },
+      {
+        $group: {
+          _id: null,
+          presentCount: { $sum: 1 },
+          totalWorkingMs: {
+            $sum: {
+              $cond: [
+                { $and: [{ $ne: ["$checkOutTime", null] }, { $ne: ["$checkInTime", null] }] },
+                { $subtract: [{ $toDate: "$checkOutTime" }, { $toDate: "$checkInTime" }] },
+                0
+              ]
+            }
+          }
+        }
+      }
     ]);
 
-    const counts = { Present: 0, Late: 0, Absent: 0 };
-    agg.forEach((a) => { 
-      if (counts[a._id] !== undefined) counts[a._id] = a.count; 
-    });
-
-    // 3. Exact Absent Calculation
-    const markedCount = counts.Present + counts.Late;
-    counts.Absent = Math.max(0, totalEmployees - markedCount);
+    const present = agg.length > 0 ? agg[0].presentCount : 0;
+    const totalWorkingMs = agg.length > 0 ? agg[0].totalWorkingMs : 0;
+    const absent = Math.max(0, totalEmployees - present);
+    
+    // Convert ms to hours
+    const totalWorkingHours = (totalWorkingMs / 3600000).toFixed(1);
 
     return res.json({
       success: true,
       data: {
-        total:    totalEmployees, // Total (Staff + Riders)
+        total: totalEmployees,
         staffCount: totalStaff,
         riderCount: totalRiders,
-        present:  counts.Present,
-        late:     counts.Late,
-        absent:   counts.Absent,
+        present: present,
+        absent: absent,
+        totalWorkingHours: totalWorkingHours,
       },
     });
   } catch (err) {
@@ -597,57 +609,64 @@ exports.getStats = async (req, res) => {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // GET /api/admin/attendance/weekly
-// Returns last 7 days aggregate
+// Returns last 7 days PER-USER aggregate (Present, Absent, Hours)
 // ─────────────────────────────────────────────────────────────────────────────
 exports.getWeekly = async (req, res) => {
   try {
-    // Total Employees (Staff + Riders)
-    const totalStaff = await Staff.countDocuments({ isActive: true, isDeleted: false });
-    const totalRiders = await Rider.countDocuments();
-    const totalEmployees = totalStaff + totalRiders;
-
-    // Build last-7-day date strings
     const days = [];
     for (let i = 6; i >= 0; i--) {
       const d = new Date();
       d.setDate(d.getDate() - i);
-      days.push({
-        date:  d.toLocaleDateString("en-CA"),
-        label: d.toLocaleDateString("en-IN", { weekday: "short", day: "2-digit", month: "short" }),
-      });
+      days.push(d.toLocaleDateString("en-CA"));
     }
 
-    const dateStrings = days.map((d) => d.date);
-
     const agg = await attendance.aggregate([
-      { $match: { date: { $in: dateStrings } } },
+      { $match: { date: { $in: days } } },
       {
         $group: {
-          _id:     { date: "$date", status: "$status" },
-          count:   { $sum: 1 },
-        },
+          _id: "$staffId",
+          role: { $first: "$role" },
+          presentDays: { $sum: 1 },
+          totalWorkingMs: {
+            $sum: {
+              $cond: [
+                { $and: [{ $ne: ["$checkOutTime", null] }, { $ne: ["$checkInTime", null] }] },
+                { $subtract: [{ $toDate: "$checkOutTime" }, { $toDate: "$checkInTime" }] },
+                0
+              ]
+            }
+          }
+        }
       },
+      { $lookup: { from: "staffs", localField: "_id", foreignField: "_id", as: "staffInfo" } },
+      { $lookup: { from: "riders", localField: "_id", foreignField: "_id", as: "riderInfo" } },
+      {
+        $project: {
+          role: 1, presentDays: 1, totalWorkingMs: 1,
+          user: {
+            $cond: [
+              { $gt: [{ $size: "$staffInfo" }, 0] },
+              { $arrayElemAt: ["$staffInfo", 0] },
+              { $arrayElemAt: ["$riderInfo", 0] }
+            ]
+          }
+        }
+      }
     ]);
 
-    // pivot
-    const map = {};
-    agg.forEach(({ _id, count }) => {
-      if (!map[_id.date]) map[_id.date] = { Present: 0, Late: 0, Absent: 0 };
-      if (map[_id.date][_id.status] !== undefined) map[_id.date][_id.status] = count;
-    });
+    const result = agg.map((a) => ({
+      staffId: a._id,
+      name: a.user ? a.user.name : "Unknown",
+      phone: a.user ? a.user.phone : "N/A",
+      department: a.user?.department ? a.user.department : (a.role === "Rider" ? "Riders Fleet" : "Unknown"),
+      role: a.role,
+      presentDays: a.presentDays,
+      absentDays: Math.max(0, 7 - a.presentDays), // 7 days in a week
+      workingHours: (a.totalWorkingMs / 3600000).toFixed(1)
+    }));
 
-    const result = days.map(({ date, label }) => {
-      const d = map[date] || { Present: 0, Late: 0 };
-      const marked = d.Present + d.Late;
-      return {
-        date,
-        label,
-        present: d.Present,
-        late:    d.Late,
-        absent:  Math.max(0, totalEmployees - marked), // Use Total Employees
-        total:   totalEmployees,
-      };
-    });
+    // Sort by most working hours
+    result.sort((a, b) => b.workingHours - a.workingHours);
 
     return res.json({ success: true, data: result });
   } catch (err) {
@@ -658,96 +677,73 @@ exports.getWeekly = async (req, res) => {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // GET /api/admin/attendance/monthly
-// Returns current-month stats + per-department breakdown
+// Returns current month PER-USER aggregate (Present, Absent, Hours)
 // ─────────────────────────────────────────────────────────────────────────────
 exports.getMonthly = async (req, res) => {
   try {
-    const now   = new Date();
-    const year  = now.getFullYear();
+    const now = new Date();
+    const year = now.getFullYear();
     const month = String(now.getMonth() + 1).padStart(2, "0");
-    const prefix = `${year}-${month}-`;  // "2025-04-"
+    const prefix = `${year}-${month}-`; 
 
-    // Count distinct days in the month that have at least 1 record
+    // Find how many distinct days have records so far in this month
     const distinctDays = await attendance.distinct("date", {
       date: { $regex: `^${prefix}` },
     });
-    const workingDays = distinctDays.length || 1; // avoid div-by-zero
+    const workingDays = distinctDays.length || 1; 
 
-    // Total Employees (Staff + Riders)
-    const totalStaff = await Staff.countDocuments({ isActive: true, isDeleted: false });
-    const totalRiders = await Rider.countDocuments();
-    const totalEmployees = totalStaff + totalRiders;
-
-    // Aggregate by (date, status)
     const agg = await attendance.aggregate([
       { $match: { date: { $regex: `^${prefix}` } } },
       {
         $group: {
-          _id:   { date: "$date", status: "$status" },
-          count: { $sum: 1 },
-        },
-      },
-    ]);
-
-    // Total attendances (present + late)
-    let totalPresent = 0;
-    agg.forEach(({ _id, count }) => {
-      if (_id.status === "Present" || _id.status === "Late") totalPresent += count;
-    });
-
-    const avgAttendance = totalEmployees
-      ? Math.round((totalPresent / (totalEmployees * workingDays)) * 100)
-      : 0;
-    const totalAbsences = Math.max(0, totalEmployees * workingDays - totalPresent);
-
-    // Per-department breakdown (Including Riders as a distinct group)
-    const deptAgg = await attendance.aggregate([
-      { $match: { date: { $regex: `^${prefix}` } } },
-      {
-        $lookup: {
-          from:         "staffs",
-          localField:   "staffId",
-          foreignField: "_id",
-          as:           "staff",
-        },
-      },
-      {
-        $addFields: {
-          staffInfo: { $arrayElemAt: ["$staff", 0] }
+          _id: "$staffId",
+          role: { $first: "$role" },
+          presentDays: { $sum: 1 },
+          totalWorkingMs: {
+            $sum: {
+              $cond: [
+                { $and: [{ $ne: ["$checkOutTime", null] }, { $ne: ["$checkInTime", null] }] },
+                { $subtract: [{ $toDate: "$checkOutTime" }, { $toDate: "$checkInTime" }] },
+                0
+              ]
+            }
+          }
         }
       },
+      { $lookup: { from: "staffs", localField: "_id", foreignField: "_id", as: "staffInfo" } },
+      { $lookup: { from: "riders", localField: "_id", foreignField: "_id", as: "riderInfo" } },
       {
-        $group: {
-          // Check if the attendance role says 'rider', if so group as 'Riders Fleet', otherwise use staff department
-          _id: { 
-             $cond: [
-                { $regexMatch: { input: { $ifNull: ["$role", ""] }, regex: /rider/i } }, 
-                "Riders Fleet", 
-                { $ifNull: ["$staffInfo.department", "Other/Unknown"] } 
-             ]
-          },
-          present: {
-            $sum: { $cond: [{ $in: ["$status", ["Present", "Late"]] }, 1, 0] },
-          },
-          total: { $sum: 1 },
-        },
-      },
+        $project: {
+          role: 1, presentDays: 1, totalWorkingMs: 1,
+          user: {
+            $cond: [
+              { $gt: [{ $size: "$staffInfo" }, 0] },
+              { $arrayElemAt: ["$staffInfo", 0] },
+              { $arrayElemAt: ["$riderInfo", 0] }
+            ]
+          }
+        }
+      }
     ]);
 
-    const byDept = deptAgg.map((d) => ({
-      department: d._id,
-      present:    d.present,
-      total:      d.total,
-      pct:        Math.round((d.present / Math.max(d.total, 1)) * 100),
-    })).sort((a, b) => b.pct - a.pct);
+    const result = agg.map((a) => ({
+      staffId: a._id,
+      name: a.user ? a.user.name : "Unknown",
+      phone: a.user ? a.user.phone : "N/A",
+      department: a.user?.department ? a.user.department : (a.role === "Rider" ? "Riders Fleet" : "Unknown"),
+      role: a.role,
+      presentDays: a.presentDays,
+      absentDays: Math.max(0, workingDays - a.presentDays), 
+      workingHours: (a.totalWorkingMs / 3600000).toFixed(1)
+    }));
+
+    result.sort((a, b) => b.workingHours - a.workingHours);
 
     return res.json({
       success: true,
-      data: { 
-        workingDays, 
-        avgAttendance, 
-        totalAbsences, 
-        byDept 
+      data: {
+        workingDays,
+        list: result,
       },
     });
   } catch (err) {

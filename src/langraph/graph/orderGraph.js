@@ -7,7 +7,7 @@ const Order = require("../../models/User/ordersModel");
 
 const {
   checkUserExists, registerNewUser, getOrCreateSession, getActiveOrder, getActiveOrdersToday,
-  getPendingOrders, getPaymentLinkByOrderId, getAvailabilityStatus, // 🔥 NEW IMPORTS
+  getPendingOrders, getPaymentLinkByOrderId, 
   getTodayRosterItems, searchTodayRosterItems, getUserAddresses, getUserOrderStats, 
   getCategories, getMenuByCategory, getAvailableCategoriesToday,
   saveNewAddress, addItemsToCart, placeOrder, cancelOrder, removeItemsFromCart, 
@@ -32,7 +32,6 @@ const IntentSchema = z.object({
   intent: z.enum([
     "GREETING", "SHOW_MENU", "SELECT_CATEGORY", "SEARCH_ITEM", "ADD_TO_CART", "REMOVE_FROM_CART", 
     "CHECKOUT", "PROVIDE_ADDRESS", "PROVIDE_SHARED_LOCATION", "PROVIDE_HOUSE_NUMBER", "SELECT_SAVED_ADDRESS", "PROMPT_NEW_ADDRESS", "PROVIDE_NAME", 
-    "CONFIRM_ADDRESS_YES", "CONFIRM_ADDRESS_NO", // 🔥 NEW INTENTS
     "COMPLETE_ORDER", "TRACK_ORDER", "ORDER_STATS", 
     "CANCEL_ORDER", "HELP", "GENERAL_INFO", "SHOW_OFFERS", "SHOW_ALL_TODAY", "PROMPT_QUANTITY", "HANDLE_QUANTITY_SELECTION", 
     "VIEW_PENDING_ORDERS", "PAY_SPECIFIC_ORDER", 
@@ -125,14 +124,6 @@ async function agentDecisionNode(state) {
     return { ...state, aiIntent: "PROVIDE_NAME", aiData: { user_name: rawMsg } };
   }
 
-  // 🔥 FIX: Address Confirmation Interceptors
-  if (msg === "btn_confirm_address_yes" || msg === "yes proceed") {
-      return { ...state, aiIntent: "CONFIRM_ADDRESS_YES", aiData: {} };
-  }
-  if (msg === "btn_confirm_address_no" || msg === "change address") {
-      return { ...state, aiIntent: "CONFIRM_ADDRESS_NO", aiData: {} };
-  }
-
   if (previousBotMessage.includes("makaan/flat number")) {
     return { ...state, aiIntent: "PROVIDE_HOUSE_NUMBER", aiData: { house_number: rawMsg } };
   }
@@ -208,13 +199,11 @@ async function actionExecutionNode(state) {
   const { aiIntent, aiData, phone, inputText } = state;
   let user = await checkUserExists(phone);
 
-  const availStatus = await getAvailabilityStatus();
-
   if (!user && aiIntent !== "PROVIDE_NAME") {
     if (aiIntent === "SHOW_MENU" || inputText.toLowerCase().includes("skip") || inputText.toLowerCase().includes("btn_")) {
         user = await registerNewUser(phone, "Guest");
     } else {
-        let replyText = `👑 *Welcome to Hotel The Galaxy!*\n${availStatus.message}\n\nKripya apna naam type karke bhejein,\ntaaki hum aapko behtar serve kar sakein.`;
+        let replyText = "👑 *Welcome to Hotel The Galaxy!*\n\nKripya apna naam type karke bhejein,\ntaaki hum aapko behtar serve kar sakein.";
         userContextMemory[phone] = replyText;
         
         let interactive = { 
@@ -227,17 +216,6 @@ async function actionExecutionNode(state) {
     }
   }
 
-  // 🔥 FIX: Strict Availability Check for Order Actions
-  const orderIntents = ["PROMPT_QUANTITY", "HANDLE_QUANTITY_SELECTION", "ADD_TO_CART", "CHECKOUT"];
-  if (orderIntents.includes(aiIntent)) {
-      if (!availStatus.isOpen) {
-          let replyText = availStatus.message;
-          let interactive = { type: "button", body: { text: replyText }, action: { buttons: [{ type: "reply", reply: { id: "btn_menu", title: "🍔 View Menu Only" } }] } };
-          userContextMemory[phone] = replyText;
-          return { ...state, replyText, interactive };
-      }
-  }
-
   const session = await getOrCreateSession(phone); 
   let replyText = "";
   let interactive = null; 
@@ -246,7 +224,7 @@ async function actionExecutionNode(state) {
     case "PROVIDE_NAME": {
       const extractedName = aiData?.user_name || inputText.trim() || "Guest";
       if (!user) user = await registerNewUser(phone, extractedName);
-      replyText = `Aapse milkar accha laga, *${user.fullName}*! 👑\n${availStatus.message}\n\nAaj aap kya order karna chahenge?`;
+      replyText = `Aapse milkar accha laga, *${user.fullName}*! 👑\n\nAaj aap kya order karna chahenge?`;
       interactive = { 
         type: "button", 
         header: { type: "image", image: { link: HOTEL_LOGO_URL } },
@@ -257,7 +235,7 @@ async function actionExecutionNode(state) {
     }
     case "GREETING": {
       const activeOrders = await getActiveOrdersToday(user._id);
-      replyText = `👑 *Welcome back, ${user.fullName}!*\n${availStatus.message}\n\nHotel The Galaxy mein aapka swagat hai.\nAaj kya order karna chahenge aap?`;
+      replyText = `👑 *Welcome back, ${user.fullName}!*\n\nHotel The Galaxy mein aapka swagat hai.\nAaj kya order karna chahenge aap?`;
       let buttons = [{ type: "reply", reply: { id: "btn_menu", title: "🍔 Menu" } }];
       if (activeOrders && activeOrders.length > 0) { buttons.push({ type: "reply", reply: { id: "btn_track", title: "📦 Track" } }); }
       buttons.push({ type: "reply", reply: { id: "btn_offers", title: "🎁 Offers" } });
@@ -437,13 +415,9 @@ async function actionExecutionNode(state) {
       let cartSummary = cart.map(item => `▪️ ${item.quantity}x ${item.name} - ₹${item.total}`).join("\n");
       let subtotal = cart.reduce((sum, item) => sum + item.total, 0);
       let feedbackString = messages.join("\n"); 
+      let deliveryMsg = subtotal >= (setting?.freeDeliveryAbove || 500) ? "FREE! 🎉" : `₹${setting?.baseFee || 30}`;
       
-      const dCharge = setting?.deliveryCharge || {};
-      const isFree = dCharge.isFreeDelivery || subtotal >= (dCharge.freeDeliveryAbove || 500);
-      let deliveryMsg = isFree ? "FREE! 🎉" : `₹${dCharge.baseFee || 30} (Based on distance)`;
-      let freeMsg = dCharge.isFreeDelivery ? "Aaj completely FREE delivery hai!" : `(₹${dCharge.freeDeliveryAbove || 500} se upar free delivery!)`;
-      
-      replyText = `${feedbackString}\n\n🛒 *Aapka Cart:*\n${cartSummary}\n\n🧾 Subtotal: ₹${subtotal}\n🚚 Est. Delivery: ${deliveryMsg}\n*${freeMsg}*\n\nAur kuch chahiye ya checkout karein?`;
+      replyText = `${feedbackString}\n\n🛒 *Aapka Cart:*\n${cartSummary}\n\n🧾 Subtotal: ₹${subtotal}\n🚚 Est. Delivery: ${deliveryMsg}\n*(₹${setting?.freeDeliveryAbove || 500} se upar free delivery!)*\n\nAur kuch chahiye ya checkout karein?`;
       interactive = { type: "button", body: { text: replyText }, action: { buttons: [ { type: "reply", reply: { id: "btn_add_more", title: "➕ Aur Add" } }, { type: "reply", reply: { id: "btn_checkout", title: "➡️ Checkout" } } ] } };
       break;
     }
@@ -457,13 +431,9 @@ async function actionExecutionNode(state) {
         let cartSummary = cart.map(item => `▪️ ${item.quantity}x ${item.name} - ₹${item.total}`).join("\n");
         let subtotal = cart.reduce((sum, item) => sum + item.total, 0);
         let feedbackString = messages.join("\n"); 
+        let deliveryMsg = subtotal >= (setting?.freeDeliveryAbove || 500) ? "FREE! 🎉" : `₹${setting?.baseFee || 30}`;
         
-        const dCharge = setting?.deliveryCharge || {};
-        const isFree = dCharge.isFreeDelivery || subtotal >= (dCharge.freeDeliveryAbove || 500);
-        let deliveryMsg = isFree ? "FREE! 🎉" : `₹${dCharge.baseFee || 30} (Based on distance)`;
-        let freeMsg = dCharge.isFreeDelivery ? "Aaj completely FREE delivery hai!" : `(₹${dCharge.freeDeliveryAbove || 500} se upar free delivery!)`;
-        
-        replyText = `${feedbackString}\n\n🛒 *Aapka Cart:*\n${cartSummary}\n\n🧾 Subtotal: ₹${subtotal}\n🚚 Est. Delivery: ${deliveryMsg}\n*${freeMsg}*\n\nAur kuch chahiye ya checkout karein?`;
+        replyText = `${feedbackString}\n\n🛒 *Aapka Cart:*\n${cartSummary}\n\n🧾 Subtotal: ₹${subtotal}\n🚚 Est. Delivery: ${deliveryMsg}\n*(₹${setting?.freeDeliveryAbove || 500} se upar free delivery!)*\n\nAur kuch chahiye ya checkout karein?`;
         interactive = { type: "button", body: { text: replyText }, action: { buttons: [ { type: "reply", reply: { id: "btn_add_more", title: "➕ Aur Add" } }, { type: "reply", reply: { id: "btn_checkout", title: "➡️ Checkout" } } ] } };
       }
       break;
@@ -482,19 +452,13 @@ async function actionExecutionNode(state) {
         } else {
           let cartSummary = cart.map(item => `▪️ ${item.quantity}x ${item.name} - ₹${item.total}`).join("\n");
           let subtotal = cart.reduce((sum, item) => sum + item.total, 0);
-          
-          const dCharge = setting?.deliveryCharge || {};
-          const isFree = dCharge.isFreeDelivery || subtotal >= (dCharge.freeDeliveryAbove || 500);
-          let deliveryMsg = isFree ? "FREE! 🎉" : `₹${dCharge.baseFee || 30} (Based on distance)`;
-          let freeMsg = dCharge.isFreeDelivery ? "Aaj completely FREE delivery hai!" : `(₹${dCharge.freeDeliveryAbove || 500} se upar free delivery!)`;
-          
-          replyText = `🗑️ Item remove kar diya gaya hai.\n\n🛒 *Updated Cart:*\n${cartSummary}\n\n🧾 Subtotal: ₹${subtotal}\n🚚 Est. Delivery: ${deliveryMsg}\n*${freeMsg}*\n\nAur kuch chahiye ya checkout karein?`;
+          let deliveryMsg = subtotal >= (setting?.freeDeliveryAbove || 500) ? "FREE! 🎉" : `₹${setting?.baseFee || 30}`;
+          replyText = `🗑️ Item remove kar diya gaya hai.\n\n🛒 *Updated Cart:*\n${cartSummary}\n\n🧾 Subtotal: ₹${subtotal}\n🚚 Est. Delivery: ${deliveryMsg}\n*(₹${setting?.freeDeliveryAbove || 500} se upar free delivery!)*\n\nAur kuch chahiye ya checkout karein?`;
           interactive = { type: "button", body: { text: replyText }, action: { buttons: [ { type: "reply", reply: { id: "btn_add_more", title: "➕ Aur Add" } }, { type: "reply", reply: { id: "btn_checkout", title: "➡️ Checkout" } } ] } };
         }
       }
       break;
     }
-
     case "CHECKOUT": {
       const addresses = await getUserAddresses(user._id);
       let addressPrompt = `📍 *Aapka order kahan deliver karna hai?*\n\nNeeche diye gaye option se select karein:`;
@@ -530,8 +494,6 @@ async function actionExecutionNode(state) {
       };
       break; 
     }
-
-    // 🔥 FIX: Address Confirmation Step
     case "PROVIDE_SHARED_LOCATION": {
       const loc = aiData?.location || state.location;
       if (!loc || !loc.lat || !loc.lng) {
@@ -557,11 +519,19 @@ async function actionExecutionNode(state) {
       }
       const finalAddress = { area: savedLoc.area, landmark: `House/Flat: ${houseNumber}` };
       const newAddr = await saveNewAddress(user._id, finalAddress, savedLoc.lat, savedLoc.lng);
-      
-      pendingLocationMemory[phone] = { confirmAddressId: newAddr._id, distanceKm: savedLoc.distanceKm, addressStr: `${houseNumber}, ${savedLoc.area}` };
-      
-      replyText = `📍 *Aapki Delivery Location:*\n${houseNumber}, ${savedLoc.area}\n\nKya yeh location bilkul theek hai?`;
-      interactive = { type: "button", body: { text: replyText }, action: { buttons: [ { type: "reply", reply: { id: "btn_confirm_address_yes", title: "✅ Yes, Proceed" } }, { type: "reply", reply: { id: "btn_confirm_address_no", title: "Change Address" } } ] } };
+      session.addressId = newAddr._id; await session.save();
+      delete pendingLocationMemory[phone]; 
+
+      const cartItems = session.cart || [];
+      if(cartItems.length === 0) { replyText = "Aapka cart khali hai. Pehle menu se items add karein."; break; }
+
+      const paymentData = await processBotOrderAndPayment(user._id, phone, cartItems, newAddr._id, savedLoc.distanceKm);
+      if (paymentData.success) {
+        paymentAttemptsMemory[phone] = 0; 
+        replyText = `✅ *Address Save Ho Gaya:*\n${houseNumber}, ${savedLoc.area}\n\n💳 *Bill Details:*\nSubtotal: ₹${paymentData.subtotal.toFixed(2)}\n🚚 Delivery: ₹${paymentData.deliveryCharge.toFixed(2)}\n💰 *Grand Total: ₹${paymentData.totalAmount.toFixed(2)}*\n\n*(Payment successful hote hi order confirm ho jayega!)*`;
+        interactive = { type: "cta_url", body: { text: replyText }, action: { name: "cta_url", parameters: { display_text: `Pay ₹${paymentData.totalAmount.toFixed(2)}`, url: paymentData.paymentUrl } } };
+        session.cart = []; await session.save();
+      } else { replyText = "Payment link banane mein issue aaya. Kripya thodi der baad try karein."; }
       break;
     }
     case "PROVIDE_ADDRESS": {
@@ -572,95 +542,57 @@ async function actionExecutionNode(state) {
         break; 
       }
       const newAddr = await saveNewAddress(user._id, extractedAddress, locationCheck.lat, locationCheck.lng);
-      
-      pendingLocationMemory[phone] = { confirmAddressId: newAddr._id, distanceKm: locationCheck.distanceKm, addressStr: `${extractedAddress.landmark} ${extractedAddress.area}` };
-      
-      replyText = `📍 *Aapki Delivery Location:*\n${extractedAddress.landmark} ${extractedAddress.area}\n\nKya yeh location bilkul theek hai?`;
-      interactive = { type: "button", body: { text: replyText }, action: { buttons: [ { type: "reply", reply: { id: "btn_confirm_address_yes", title: "✅ Yes, Proceed" } }, { type: "reply", reply: { id: "btn_confirm_address_no", title: "Change Address" } } ] } };
+      session.addressId = newAddr._id; await session.save();
+      const cartItems = session.cart || [];
+      if(cartItems.length === 0) { replyText = "Aapka cart khali hai. Pehle menu se items add karein."; break; }
+
+      const paymentData = await processBotOrderAndPayment(user._id, phone, cartItems, newAddr._id, locationCheck.distanceKm);
+      if (paymentData.success) {
+        paymentAttemptsMemory[phone] = 0; 
+        replyText = `✅ *Naya Address Save Hua:*\n${newAddr.street}\n\n💳 *Bill Details:*\nSubtotal: ₹${paymentData.subtotal.toFixed(2)}\n🚚 Delivery: ₹${paymentData.deliveryCharge.toFixed(2)}\n💰 *Grand Total: ₹${paymentData.totalAmount.toFixed(2)}*\n\n*(Payment successful hote hi order confirm ho jayega!)*`;
+        interactive = { type: "cta_url", body: { text: replyText }, action: { name: "cta_url", parameters: { display_text: `Pay ₹${paymentData.totalAmount.toFixed(2)}`, url: paymentData.paymentUrl } } };
+        session.cart = []; await session.save();
+      } else { replyText = "Payment link banane mein issue aaya. Kripya thodi der baad try karein."; }
       break;
     }
     case "SELECT_SAVED_ADDRESS": {
       let addressId = aiData?.addressId; 
-      let addressStr = "Saved Address";
       if (!addressId) {
         const savedAddresses = await getUserAddresses(user._id);
         const topAddresses = savedAddresses.slice(0, 2);
         let selectedIdx = (aiData?.address_index || 1) - 1;
         if (inputText.toLowerCase().includes("home")) selectedIdx = 0; 
-        if (selectedIdx >= 0 && selectedIdx < topAddresses.length) { 
-            addressId = topAddresses[selectedIdx]._id.toString(); 
-            addressStr = topAddresses[selectedIdx].street;
-        } else { 
+        if (selectedIdx >= 0 && selectedIdx < topAddresses.length) { addressId = topAddresses[selectedIdx]._id.toString(); } 
+        else { 
           replyText = "📍 *Naya Address*\n\nNeeche diye gaye *'Send Location'* button par click karke apni current location share karein.\n\nYa phir apna address type karke bhejein."; 
           userContextMemory[phone] = replyText; 
-          return { ...state, replyText, interactive: { type: "location_request_message", body: { text: replyText }, action: { name: "send_location" } } }; 
+          return { 
+            ...state, 
+            replyText, 
+            interactive: {
+              type: "location_request_message",
+              body: { text: replyText },
+              action: { name: "send_location" }
+            }
+          }; 
         }
-      } else {
-        const selectedAddr = await getUserAddresses(user._id).then(addrs => addrs.find(a => a._id.toString() === addressId));
-        if(selectedAddr) addressStr = selectedAddr.street;
       }
-      
-      pendingLocationMemory[phone] = { confirmAddressId: addressId, distanceKm: null, addressStr: addressStr };
-      
-      replyText = `📍 *Aapki Delivery Location:*\n${addressStr}\n\nKya yeh location bilkul theek hai?`;
-      interactive = { type: "button", body: { text: replyText }, action: { buttons: [ { type: "reply", reply: { id: "btn_confirm_address_yes", title: "✅ Yes, Proceed" } }, { type: "reply", reply: { id: "btn_confirm_address_no", title: "Change Address" } } ] } };
-      break;
-    }
-
-    // 🔥 FIX: Address Confirmation Resolution with GST display
-    case "CONFIRM_ADDRESS_NO": {
-       // Send them back to checkout address selection
-       const addresses = await getUserAddresses(user._id);
-       let addressPrompt = `📍 *Aapka order kahan deliver karna hai?*\n\nNeeche diye gaye option se select karein:`;
-       
-       if (addresses && addresses.length > 0) {
-         const topAddresses = addresses.slice(0, 2); 
-         let buttons = topAddresses.map((addr, idx) => {
-           let uniqueTitle = `${idx + 1}. ${addr.label || 'Home'}`.substring(0, 20); 
-           return { type: "reply", reply: { id: `addr_${addr._id}`, title: uniqueTitle } };
-         });
-         buttons.push({ type: "reply", reply: { id: "btn_new_address", title: "➕ Naya Address" } });
-         interactive = { type: "button", body: { text: `${addressPrompt}` }, action: { buttons } };
-       } else { 
-         replyText = "📍 *Naya Address*\n\nNeeche diye gaye *'Send Location'* button par click karke apni current location share karein."; 
-         interactive = { type: "location_request_message", body: { text: replyText }, action: { name: "send_location" } };
-       }
-       break;
-    }
-    case "CONFIRM_ADDRESS_YES": {
-      const mem = pendingLocationMemory[phone];
-      if (!mem || !mem.confirmAddressId) {
-          replyText = "Session expire ho gaya hai. Kripya wapas checkout karein.";
-          interactive = { type: "button", body: { text: replyText }, action: { buttons: [{ type: "reply", reply: { id: "btn_checkout", title: "➡️ Checkout" } }] } };
-          break;
-      }
-      
-      session.addressId = mem.confirmAddressId; await session.save();
+      session.addressId = addressId; await session.save();
       const cartItems = session.cart || [];
       if(cartItems.length === 0) { replyText = "Aapka cart khali hai. Pehle menu se items add karein."; break; }
 
-      const paymentData = await processBotOrderAndPayment(user._id, phone, cartItems, mem.confirmAddressId, mem.distanceKm);
+      const paymentData = await processBotOrderAndPayment(user._id, phone, cartItems, addressId, null);
       if (paymentData.success) {
         paymentAttemptsMemory[phone] = 0; 
-        
-        replyText = `✅ *Address Confirmed!*\n\n💳 *Bill Details:*\nSubtotal: ₹${paymentData.subtotal}\n🍲 Food GST: ₹${paymentData.foodGST}\n`;
-        
-        if (paymentData.isFreeDelivery) {
-            replyText += `🚚 Delivery: FREE! 🎉\n`;
-        } else {
-            replyText += `🚚 Delivery Fee: ₹${paymentData.deliveryCharge}\n`;
-            if (paymentData.deliveryGST > 0) replyText += `🛵 Delivery GST: ₹${paymentData.deliveryGST}\n`;
-        }
-
-        replyText += `\n💰 *Grand Total: ₹${paymentData.totalAmount}*\n\n*(Payment successful hote hi order confirm ho jayega!)*`;
-        
-        interactive = { type: "cta_url", body: { text: replyText }, action: { name: "cta_url", parameters: { display_text: `Pay ₹${paymentData.totalAmount}`, url: paymentData.paymentUrl } } };
+        const selectedAddr = await getUserAddresses(user._id).then(addrs => addrs.find(a => a._id.toString() === addressId));
+        replyText = `✅ *Address Confirm:*\n${selectedAddr?.street || 'Home'}\n\n💳 *Bill Details:*\nSubtotal: ₹${paymentData.subtotal.toFixed(2)}\n🚚 Delivery: ₹${paymentData.deliveryCharge.toFixed(2)}\n💰 *Grand Total: ₹${paymentData.totalAmount.toFixed(2)}*\n\n*(Payment successful hote hi order confirm ho jayega!)*`;
+        interactive = { type: "cta_url", body: { text: replyText }, action: { name: "cta_url", parameters: { display_text: `Pay ₹${paymentData.totalAmount.toFixed(2)}`, url: paymentData.paymentUrl } } };
         session.cart = []; await session.save();
-        delete pendingLocationMemory[phone];
       } else { replyText = "Payment link banane mein issue aaya. Kripya thodi der baad try karein."; }
       break;
     }
 
+    // 🔥 FIX: Direct Tracking URL injected inside chat!
     case "TRACK_ORDER": {
       const activeOrders = await getActiveOrdersToday(user._id);
       
@@ -693,6 +625,7 @@ async function actionExecutionNode(state) {
             if (orderStatus !== "pending" && order.paymentStatus !== "pending") {
                 if (["dispatched", "out_for_delivery"].includes(orderStatus) && order.rider) { 
                   replyText += `🛵 Rider: ${order.rider.name || "Executive"} (📞 ${order.rider.phone})\n`; 
+                  // 🔥 NEW: Direct URL inside chat for tracking
                   const trackingUrl = `https://uat.hotelthegalaxy.in/track-order/${order._id}`;
                   replyText += `📍 *Track Here:* ${trackingUrl}\n`;
                 } else { 

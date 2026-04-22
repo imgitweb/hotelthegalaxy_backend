@@ -13,9 +13,21 @@ const Setting = require("../../models/Setting");
 const Combo = require("../../models/dining/combomodel"); 
 const Rider = require("../../models/rider.model");
 const Trip = require("../../models/TripModel");
-const Availability = require("../../models/availabilityModel"); // 🔥 NEW
+const Coupon = require("../../models/couponModel");
+const CouponUsage = require("../../models/couponUsageModel");
+const Availability = require("../../models/availabilityModel"); 
 const mongoose = require("mongoose");
 const axios = require("axios");
+
+// 🔥 NAYA: Strict IST Timezone Helper (Isse Roster/Date ka koi bug nahi aayega)
+function getISTBounds() {
+  const now = new Date();
+  const istOffset = 5.5 * 60 * 60 * 1000;
+  const istTime = new Date(now.getTime() + istOffset);
+  const startOfTodayUTC = new Date(Date.UTC(istTime.getUTCFullYear(), istTime.getUTCMonth(), istTime.getUTCDate(), 0, 0, 0, 0) - istOffset);
+  const endOfTodayUTC = new Date(Date.UTC(istTime.getUTCFullYear(), istTime.getUTCMonth(), istTime.getUTCDate(), 23, 59, 59, 999) - istOffset);
+  return { start: startOfTodayUTC, end: endOfTodayUTC, now };
+}
 
 function calculateDistance(lat1, lon1, lat2, lon2) {
   if (!lat1 || !lon1 || !lat2 || !lon2) return 0;
@@ -29,7 +41,6 @@ function calculateDistance(lat1, lon1, lat2, lon2) {
   return R * c; 
 }
 
-// 🔥 NAYA: Kitchen Availability Logic
 async function getAvailabilityStatus() {
   try {
     const avail = await Availability.findOne() || {};
@@ -60,7 +71,6 @@ async function getAvailabilityStatus() {
   }
 }
 
-// 🔥 FIX: Max Distance checked dynamically from Setting
 async function verifyDeliveryLocation(area, landmark) {
   try {
     const GOOGLE_API_KEY = process.env.GOOGLE_MAPS_API_KEY;
@@ -146,16 +156,14 @@ async function getActiveOrder(userId) { return await Order.findOne({ user: userI
 
 async function getActiveOrdersToday(userId) {
   try {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
+    const { start, now } = getISTBounds();
     const orders = await Order.find({ 
         user: userId, 
-        createdAt: { $gte: today },
+        createdAt: { $gte: start },
         status: { $nin: ["delivered", "cancelled", "rejected"] } 
     }).populate("rider", "name phone vehicleNumber").sort({ createdAt: -1 }).lean();
 
     const validOrders = [];
-    const now = new Date();
 
     for (let order of orders) {
         if (order.status === "pending" || order.paymentStatus === "pending") {
@@ -199,19 +207,16 @@ async function getPaymentLinkByOrderId(orderId) {
   } catch (error) { return null; }
 }
 
-async function getCategories() { 
-  const cats = await Category.find({ isActive: true }).lean(); 
-  const comboCount = await Combo.countDocuments({ isActive: true }); // 🔥 CHECK ACTIVE
-  if (comboCount > 0) {
-    cats.unshift({ _id: "combos_virtual", name: "Special Combos" });
-  }
-  return cats;
-}
-
+// 🔥 FIX: Roster Date Bounds (IST logic)
 async function getTodayRosterItems() { 
   const today = new Date(); today.setHours(0, 0, 0, 0);
   const roster = await DailyRoster.findOne({ date: { $gte: today, $lt: new Date(today.getTime() + 24 * 60 * 60 * 1000) } }).populate("items.id"); 
   
+  // 🔥 FIX: Agar aaj ka roster update nahi hua hai, toh function yahin ruk jayega (Combos bhi nahi dikhenge)
+  if (!roster || !roster.items || roster.items.length === 0) {
+      return [];
+  }
+
   let activeOffers = [];
   try {
     const now = new Date();
@@ -219,7 +224,7 @@ async function getTodayRosterItems() {
     startOfToday.setUTCHours(0, 0, 0, 0);
 
     activeOffers = await Offer.find({ 
-        isActive: true, // 🔥 CHECK ACTIVE
+        isActive: true,
         startDate: { $lte: now }, 
         endDate: { $gte: startOfToday }
     }).lean();
@@ -261,8 +266,9 @@ async function getTodayRosterItems() {
     items.push(...regularItems);
   }
 
+  // 📦 Ab Combos wali try-catch tabhi chalegi jab upar wala roster check paas hoga
   try {
-      const combos = await Combo.find({ isActive: true }).populate("items.item", "name").lean(); // 🔥 CHECK ACTIVE
+      const combos = await Combo.find({}).populate("items.item", "name").lean();
       
       const comboItems = combos.map(c => {
          let originalPrice = c.price;
@@ -306,6 +312,20 @@ async function getTodayRosterItems() {
   return items;
 }
 
+
+async function getCategories() { 
+  const rosterItems = await getTodayRosterItems();
+  const cats = await Category.find({ isActive: true }).lean(); 
+  
+  if (rosterItems.length > 0) {
+      const comboCount = await Combo.countDocuments({ isActive: true });
+      if (comboCount > 0) {
+        cats.unshift({ _id: "combos_virtual", name: "Special Combos" });
+      }
+  }
+  return cats;
+}
+
 async function searchTodayRosterItems(searchTerm) {
   if (!searchTerm) return [];
   const term = searchTerm.toLowerCase().trim();
@@ -341,6 +361,7 @@ async function getAvailableCategoriesToday() {
 async function getMenuByCategory(categoryId) { 
   try {
     const rosterItems = await getTodayRosterItems();
+    if (!rosterItems.length) return [];
     
     if (categoryId === "combos_virtual") {
        return rosterItems.filter(item => item.isCombo);
@@ -371,9 +392,39 @@ async function saveNewAddress(userId, addressData, lat, lng) {
   } catch (error) { throw error; }
 }
 
+async function validateCartData(phone) {
+  const session = await getOrCreateSession(phone);
+  if (!session.cart || session.cart.length === 0) return { valid: true, removedItems: [] };
+  
+  const todayItems = await getTodayRosterItems();
+  let updatedCart = [];
+  let removedItems = [];
+  
+  for (let cItem of session.cart) {
+    const tItem = todayItems.find(i => String(i._id) === String(cItem.menuItemId));
+    if (tItem && tItem.availableNow > 0) {
+       let finalQty = Math.min(cItem.quantity, tItem.availableNow);
+       if (finalQty < cItem.quantity) {
+           removedItems.push(`${cItem.name} (Qty reduced)`);
+       }
+       cItem.quantity = finalQty;
+       cItem.price = tItem.basePrice; 
+       cItem.total = cItem.price * finalQty;
+       updatedCart.push(cItem);
+    } else {
+       removedItems.push(cItem.name);
+    }
+  }
+  
+  session.cart = updatedCart;
+  session.markModified('cart');
+  await session.save();
+  
+  return { valid: removedItems.length === 0, removedItems };
+}
+
 async function addItemsToCart(phone, items) { 
   const session = await getOrCreateSession(phone); const rosterItems = await getTodayRosterItems(); let feedbackMessages = []; 
-  const setting = await Setting.findOne() || {}; 
 
   for (const it of items) {
     const name = String(it.name || "").toLowerCase(); const qtyRequested = Math.max(1, parseInt(it.quantity || it.qty || 1));
@@ -398,7 +449,7 @@ async function addItemsToCart(phone, items) {
     if (newTotalQty > itemToAdd.maxAllowed) {
        const allowedToAdd = itemToAdd.maxAllowed - currentCartQty;
        if (allowedToAdd > 0) {
-           feedbackMessages.push(`⚠️ *${itemToAdd.name}* ke liye aap max *${itemToAdd.maxAllowed}* order kar sakte hain.`);
+           feedbackMessages.push(`⚠️ *${itemToAdd.name}* ki qty limit cross ho gayi thi. Humein bachi hui qty add kar di hai.`);
            if (existing) { existing.quantity += allowedToAdd; existing.total = existing.quantity * existing.price; } 
            else { session.cart.push({ menuItemId: itemToAdd._id, isCombo: itemToAdd.isCombo, name: finalName, price: itemToAdd.basePrice, quantity: allowedToAdd, total: itemToAdd.basePrice * allowedToAdd }); }
        } else { feedbackMessages.push(`⚠️ Aap already *${itemToAdd.name}* ki maximum limit cart mein add chuke hain.`); }
@@ -410,13 +461,12 @@ async function addItemsToCart(phone, items) {
   }
   session.markModified('cart'); 
   await session.save(); 
-  return { cart: session.cart, messages: feedbackMessages, setting }; 
+  return { messages: feedbackMessages }; 
 }
 
 async function removeItemsFromCart(phone, items) { 
   const session = await getOrCreateSession(phone); 
-  const setting = await Setting.findOne() || {}; 
-  if (!session.cart || session.cart.length === 0) return { cart: session.cart, setting }; 
+  if (!session.cart || session.cart.length === 0) return { cart: [] }; 
 
   for (const it of items) {
     const name = String(it.name || "").toLowerCase().trim(); const qtyToRemove = Math.max(1, parseInt(it.quantity || it.qty || 1));
@@ -430,34 +480,60 @@ async function removeItemsFromCart(phone, items) {
   }
   session.markModified('cart'); 
   await session.save(); 
-  return { cart: session.cart, setting };
+  return { cart: session.cart };
 }
 
-async function placeOrder(phone, paymentMethod) {
-  // Legacy bypass, not heavily used directly via graph anymore since we process via processBotOrderAndPayment
-  return null; 
+async function getCartSummaryText(phone, couponCode = null) {
+  const session = await getOrCreateSession(phone);
+  const cart = session.cart || [];
+  if (cart.length === 0) return { isEmpty: true };
+
+  const setting = await Setting.findOne() || {};
+  const dCharge = setting.deliveryCharge || { freeDeliveryAbove: 500, isFreeDelivery: false, baseFee: 30 };
+  const gstSet = setting.gst || { foodGSTPercent: 5, deliveryGSTPercent: 5 };
+
+  let cartSummary = cart.map(item => `▪️ ${item.quantity}x ${item.name} - ₹${item.total}`).join("\n");
+  let subtotal = cart.reduce((sum, item) => sum + item.total, 0);
+  
+  let discountMsg = "";
+  let discountAmt = 0;
+  let isFreeDelCoupon = false;
+
+  if (couponCode) {
+     const coupon = await Coupon.findOne({ code: couponCode.toUpperCase(), isActive: true, isDeleted: false });
+     if (coupon) {
+         const now = new Date();
+         if (now >= coupon.validFrom && now <= coupon.validTill && subtotal >= coupon.minOrderValue) {
+             if (coupon.discountType === "percentage") {
+                 discountAmt = (subtotal * coupon.discountValue) / 100;
+                 if (coupon.maxDiscountCap) discountAmt = Math.min(discountAmt, coupon.maxDiscountCap);
+             } else if (coupon.discountType === "flat") {
+                 discountAmt = coupon.discountValue;
+             } else if (coupon.discountType === "free_delivery") {
+                 isFreeDelCoupon = true;
+             }
+             discountAmt = Math.round(Math.min(discountAmt, subtotal));
+             if (discountAmt > 0) discountMsg = `🎫 Coupon (${coupon.code}): -₹${discountAmt}\n`;
+             if (isFreeDelCoupon) discountMsg += `🎫 Coupon (${coupon.code}): Free Delivery Applied!\n`;
+         }
+     }
+  }
+
+  const discountedSubtotal = subtotal - discountAmt;
+  const isFree = isFreeDelCoupon || dCharge.isFreeDelivery || discountedSubtotal >= (dCharge.freeDeliveryAbove || 500);
+  
+  let deliveryMsg = isFree ? "FREE! 🎉" : `₹${dCharge.baseFee} (Est.)`;
+  let foodGST = Math.round((discountedSubtotal * (gstSet.foodGSTPercent || 0)) / 100);
+  let estTotal = discountedSubtotal + foodGST + (isFree ? 0 : dCharge.baseFee);
+
+  let text = `🛒 *Aapka Cart:*\n${cartSummary}\n\n🧾 Subtotal: ₹${subtotal}\n`;
+  if (discountMsg) text += discountMsg;
+  text += `🍲 Food GST: ₹${foodGST}\n🚚 Est. Delivery: ${deliveryMsg}\n💰 Est. Total: ₹${estTotal}\n\nAur kuch chahiye ya checkout karein?`;
+
+  return { isEmpty: false, text, hasCoupon: !!discountMsg };
 }
 
-async function cancelOrder(userId) { 
-  const activeOrder = await getActiveOrder(userId);
-  if (activeOrder && ["pending", "preparing", "accepted"].includes(activeOrder.status)) { return await Order.findByIdAndUpdate(activeOrder._id, { status: "cancelled" }, { new: true }); }
-  return null; 
-}
-
-async function getUserOrderStats(userId) { 
-  try {
-    const orders = await Order.find({ user: userId }); let totalOrders = orders.length; let deliveredOrders = 0; let cancelledOrders = 0; let totalSpent = 0;
-    orders.forEach(order => {
-        const status = order.status ? order.status.toLowerCase() : "";
-        if (status === "delivered") deliveredOrders++; if (status === "cancelled") cancelledOrders++;
-        if (["confirmed", "preparing", "dispatched", "out_for_delivery", "delivered"].includes(status)) { totalSpent += (order.totalAmount || order.pricing?.total || 0); }
-    });
-    return { totalOrders, deliveredOrders, cancelledOrders, totalSpent };
-  } catch (error) { return { totalOrders: 0, deliveredOrders: 0, cancelledOrders: 0, totalSpent: 0 }; }
-}
-
-// 🔥 FIX: Strict GST and Delivery Logic
-async function processBotOrderAndPayment(userId, phone, cartItems, addressId, distanceKm = null) { 
+async function processBotOrderAndPayment(userId, phone, cartItems, addressId, distanceKm = null, couponCode = null) { 
   try {
     const fullAddress = await Address.findById(addressId); if (!fullAddress) return { success: false };
     
@@ -475,8 +551,33 @@ async function processBotOrderAndPayment(userId, phone, cartItems, addressId, di
 
     const subtotal = cartItems.reduce((sum, item) => sum + item.total, 0); 
     
+    let discountAmt = 0;
+    let isFreeDelCoupon = false;
+    let appliedCouponDoc = null;
+
+    if (couponCode) {
+       const coupon = await Coupon.findOne({ code: couponCode.toUpperCase(), isActive: true, isDeleted: false });
+       if (coupon) {
+           const now = new Date();
+           if (now >= coupon.validFrom && now <= coupon.validTill && subtotal >= coupon.minOrderValue) {
+               if (coupon.discountType === "percentage") {
+                   discountAmt = (subtotal * coupon.discountValue) / 100;
+                   if (coupon.maxDiscountCap) discountAmt = Math.min(discountAmt, coupon.maxDiscountCap);
+               } else if (coupon.discountType === "flat") {
+                   discountAmt = coupon.discountValue;
+               } else if (coupon.discountType === "free_delivery") {
+                   isFreeDelCoupon = true;
+               }
+               discountAmt = Math.round(Math.min(discountAmt, subtotal));
+               appliedCouponDoc = coupon;
+           }
+       }
+    }
+
+    const discountedSubtotal = subtotal - discountAmt;
+
     let deliveryCharge = 0;
-    if (!dCharge.isFreeDelivery && subtotal < (dCharge.freeDeliveryAbove || 500)) {
+    if (!isFreeDelCoupon && !dCharge.isFreeDelivery && discountedSubtotal < (dCharge.freeDeliveryAbove || 500)) {
       deliveryCharge = dCharge.baseFee || 30;
       if (finalDistance > (dCharge.baseDistance || 5)) {
         deliveryCharge += (finalDistance - (dCharge.baseDistance || 5)) * (dCharge.extraPerKmRate || 10);
@@ -486,11 +587,11 @@ async function processBotOrderAndPayment(userId, phone, cartItems, addressId, di
     }
     deliveryCharge = Math.round(deliveryCharge);
     
-    const foodGST = Math.round((subtotal * (gstSet.foodGSTPercent || 0)) / 100);
+    const foodGST = Math.round((discountedSubtotal * (gstSet.foodGSTPercent || 0)) / 100);
     const deliveryGST = Math.round((deliveryCharge * (gstSet.deliveryGSTPercent || 0)) / 100);
     const totalTax = foodGST + deliveryGST;
 
-    const totalAmount = subtotal + deliveryCharge + totalTax;
+    const totalAmount = discountedSubtotal + deliveryCharge + totalTax;
 
     const phoneLast4 = phone ? String(phone).slice(-4) : "0000";
     const orderCount = await Order.countDocuments({ user: userId });
@@ -507,13 +608,31 @@ async function processBotOrderAndPayment(userId, phone, cartItems, addressId, di
     });
     
     const savedOrder = await newOrder.save();
+
+    if (appliedCouponDoc) {
+       await CouponUsage.create({ coupon: appliedCouponDoc._id, user: userId, orderId: savedOrder._id, discountApplied: discountAmt });
+       await Coupon.findByIdAndUpdate(appliedCouponDoc._id, { $inc: { usedCount: 1 } });
+    }
     
     const paymentLinkReq = { amount: Math.round(totalAmount * 100), currency: "INR", accept_partial: false, description: "Hotel The Galaxy Order", customer: { contact: phone }, notify: { sms: false, email: false }, reminder_enable: true, reference_id: savedOrder._id.toString(), notes: { dbOrderId: savedOrder._id.toString(), phone: phone } };
     const paymentLink = await razorpay.paymentLink.create(paymentLinkReq);
     await Payment.create({ order: savedOrder._id, amount: totalAmount, gateway: "RAZORPAY", status: "created", metadata: { razorpayOrderId: paymentLink.id, userId: userId, paymentUrl: paymentLink.short_url } });
     
-    return { success: true, orderId: savedOrder._id, paymentUrl: paymentLink.short_url, totalAmount, subtotal, deliveryCharge, tax: totalTax, foodGST, deliveryGST, isFreeDelivery: deliveryCharge === 0 };
+    return { success: true, orderId: savedOrder._id, paymentUrl: paymentLink.short_url, totalAmount, subtotal, deliveryCharge, tax: totalTax, foodGST, deliveryGST, isFreeDelivery: deliveryCharge === 0, discountAmt };
   } catch (error) { return { success: false }; }
+}
+
+
+async function getUserOrderStats(userId) { 
+  try {
+    const orders = await Order.find({ user: userId }); let totalOrders = orders.length; let deliveredOrders = 0; let cancelledOrders = 0; let totalSpent = 0;
+    orders.forEach(order => {
+        const status = order.status ? order.status.toLowerCase() : "";
+        if (status === "delivered") deliveredOrders++; if (status === "cancelled") cancelledOrders++;
+        if (["confirmed", "preparing", "dispatched", "out_for_delivery", "delivered"].includes(status)) { totalSpent += (order.totalAmount || order.pricing?.total || 0); }
+    });
+    return { totalOrders, deliveredOrders, cancelledOrders, totalSpent };
+  } catch (error) { return { totalOrders: 0, deliveredOrders: 0, cancelledOrders: 0, totalSpent: 0 }; }
 }
 
 async function checkLatestPaymentStatus(userId) { 
@@ -543,26 +662,55 @@ async function checkLatestPaymentStatus(userId) {
 
 async function getActiveOffers() {
   try {
-    const now = new Date();
-    const startOfToday = new Date(now);
-    startOfToday.setUTCHours(0, 0, 0, 0);
-
+    const { start, now } = getISTBounds();
     const offers = await Offer.find({ 
         isActive: true,
         startDate: { $lte: now },
-        endDate: { $gte: startOfToday } 
+        endDate: { $gte: start } 
     }).populate("items", "name basePrice").populate("combos", "name price").lean(); 
     
-    const combos = await Combo.find({ isActive: true }).populate("items.item", "name").lean(); // 🔥 CHECK ACTIVE
+    const combos = await Combo.find({ isActive: true }).populate("items.item", "name").lean();
 
     return { offers, combos };
   } catch (error) { return { offers: [], combos: [] }; }
 }
 
+async function validateCoupon(phone, code) {
+  const session = await getOrCreateSession(phone);
+  const cart = session.cart || [];
+  if (cart.length === 0) return { valid: false, message: "Cart khali hai." };
+  
+  const subtotal = cart.reduce((sum, item) => sum + item.total, 0);
+  const coupon = await Coupon.findOne({ code: code.toUpperCase(), isActive: true, isDeleted: false });
+  
+  if (!coupon) return { valid: false, message: "❌ Invalid Coupon Code." };
+  
+  const now = new Date();
+  if (now < coupon.validFrom || now > coupon.validTill) return { valid: false, message: "❌ Yeh coupon expire ho chuka hai ya abhi active nahi hai." };
+  if (subtotal < coupon.minOrderValue) return { valid: false, message: `❌ Is coupon ke liye minimum order ₹${coupon.minOrderValue} hona chahiye.` };
+  if (coupon.usageLimit !== null && coupon.usedCount >= coupon.usageLimit) return { valid: false, message: "❌ Yeh coupon apni usage limit cross kar chuka hai." };
+  
+  const user = await checkUserExists(phone);
+  if (user) {
+      const userUsage = await CouponUsage.countDocuments({ coupon: coupon._id, user: user._id });
+      if (userUsage >= coupon.perUserLimit) return { valid: false, message: "❌ Aap is coupon ko pehle hi max limit tak use kar chuke hain." };
+  }
+
+  return { valid: true, message: `🎉 Coupon *${coupon.code}* successfully apply ho gaya!` };
+}
+
+async function placeOrder(phone, paymentMethod) { return null; }
+async function cancelOrder(userId) { 
+  const activeOrder = await getActiveOrder(userId);
+  if (activeOrder && ["pending", "preparing", "accepted"].includes(activeOrder.status)) { return await Order.findByIdAndUpdate(activeOrder._id, { status: "cancelled" }, { new: true }); }
+  return null; 
+}
+
 module.exports = {
-  checkUserExists, registerNewUser, getOrCreateSession, getActiveOrder, getActiveOrdersToday, getPendingOrders, getPaymentLinkByOrderId, getActiveOffers, getAvailabilityStatus, // 🔥 NEW IMPORT
+  checkUserExists, registerNewUser, getOrCreateSession, getActiveOrder, getActiveOrdersToday, getPendingOrders, getPaymentLinkByOrderId, getActiveOffers, getAvailabilityStatus,
   getCategories, getMenuByCategory, getUserAddresses, getUserOrderStats, getTodayRosterItems, 
   searchTodayRosterItems, getAvailableCategoriesToday, saveNewAddress, addItemsToCart, 
   placeOrder, cancelOrder, removeItemsFromCart, processBotOrderAndPayment, 
-  checkLatestPaymentStatus, verifyDeliveryLocation, verifyLocationByCoords
+  checkLatestPaymentStatus, verifyDeliveryLocation, verifyLocationByCoords,
+  validateCartData, getCartSummaryText, validateCoupon 
 };

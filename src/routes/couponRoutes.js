@@ -9,6 +9,7 @@ const {
   getCouponUsageReport,
   getActiveCoupons,
   validateCoupon,
+  exportBulkCoupons,generateBulkCoupons
 } = require("../controllers/couponController.js");
 
 // Middleware require setup
@@ -28,8 +29,12 @@ router.patch("/:id/toggle", adminAuth, toggleCoupon);
 router.delete("/admin/coupons/:id", adminAuth, deleteCoupon);
 router.get("/:id/report", adminAuth, getCouponUsageReport);
 
+// ... existing admin coupon routes
+router.post("/bulk",adminAuth, generateBulkCoupons);
+router.get("/export/:batchId",adminAuth, exportBulkCoupons);
+
 // ── User Routes (Protected) ─────────────────────
-router.get("/coupons", auth, getActiveCoupons);
-router.post("/coupons/validate", auth, validateCoupon);
+router.get("/coupons",auth, getActiveCoupons);
+router.post("/coupons/validate",auth ,validateCoupon);
 
 module.exports = router;
