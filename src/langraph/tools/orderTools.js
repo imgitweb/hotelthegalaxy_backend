@@ -207,36 +207,32 @@ async function getPaymentLinkByOrderId(orderId) {
 }
 
 async function getTodayRosterItems() { 
-  const { start, end, now } = getISTBounds();
-
-  const roster = await DailyRoster.findOne({ 
-      date: { $gte: start, $lte: end } 
-  }).populate("items.id").populate("items.item").populate("items.menuItem"); 
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const roster = await DailyRoster.findOne({ date: { $gte: today, $lt: new Date(today.getTime() + 24 * 60 * 60 * 1000) } }).populate("items.id"); 
   
-  if (!roster || !roster.items || roster.items.length === 0) return []; 
-
   let activeOffers = [];
   try {
+    const now = new Date();
+    const startOfToday = new Date(now);
+    startOfToday.setUTCHours(0, 0, 0, 0);
+
     activeOffers = await Offer.find({ 
-        isActive: true, 
+        isActive: true,
         startDate: { $lte: now }, 
-        endDate: { $gte: start }
+        endDate: { $gte: startOfToday }
     }).lean();
-  } catch(e) {}
+  } catch(e) { console.error("Offer fetch error:", e); }
 
   let items = [];
   
   if (roster && roster.items) {
-    const regularItems = roster.items.map(itemObj => {
-      const refItem = itemObj.id || itemObj.item || itemObj.menuItem;
-      if (!refItem || !refItem.name || itemObj.quantity <= 0) return null;
-
-      let originalPrice = refItem.basePrice;
+    const regularItems = roster.items.filter(item => item.id && item.quantity > 0).map(item => {
+      let originalPrice = item.id.basePrice;
       let finalPrice = originalPrice;
       let appliedOffer = null;
 
       for(let offer of activeOffers) {
-        if (offer.items && offer.items.map(i => String(i)).includes(String(refItem._id))) {
+        if (offer.items && offer.items.map(i => String(i)).includes(String(item.id._id))) {
           if (offer.discountType === "PERCENTAGE") {
             finalPrice = finalPrice - (finalPrice * offer.discountValue / 100);
           } else if (offer.discountType === "FLAT") {
@@ -249,63 +245,61 @@ async function getTodayRosterItems() {
       finalPrice = Math.max(0, Math.round(finalPrice));
 
       return { 
-        _id: refItem._id, 
-        name: refItem.name, 
+        _id: item.id._id, 
+        name: item.id.name, 
         basePrice: finalPrice, 
         originalPrice: originalPrice, 
-        category: refItem.category, 
-        maxAllowed: itemObj.quantity, 
-        availableNow: itemObj.quantity,
+        category: item.id.category, 
+        maxAllowed: item.quantity, 
+        availableNow: item.quantity,
         isCombo: false,
         offerName: appliedOffer
       };
-    }).filter(Boolean);
+    });
     items.push(...regularItems);
   }
 
-  if (items.length > 0) {
-    try {
-        const combos = await Combo.find({ isActive: true }).populate("items.item", "name").lean();
-        
-        const comboItems = combos.map(c => {
-           let originalPrice = c.price;
-           let finalPrice = originalPrice;
-           let appliedOffer = null;
+  try {
+      const combos = await Combo.find({}).populate("items.item", "name").lean();
+      
+      const comboItems = combos.map(c => {
+         let originalPrice = c.price;
+         let finalPrice = originalPrice;
+         let appliedOffer = null;
 
-           for(let offer of activeOffers) {
-             if (offer.combos && offer.combos.map(id => String(id)).includes(String(c._id))) {
-               if (offer.discountType === "PERCENTAGE") {
-                 finalPrice = finalPrice - (finalPrice * offer.discountValue / 100);
-               } else if (offer.discountType === "FLAT") {
-                 finalPrice = finalPrice - offer.discountValue;
-               }
-               appliedOffer = offer.name;
-               break;
+         for(let offer of activeOffers) {
+           if (offer.combos && offer.combos.map(id => String(id)).includes(String(c._id))) {
+             if (offer.discountType === "PERCENTAGE") {
+               finalPrice = finalPrice - (finalPrice * offer.discountValue / 100);
+             } else if (offer.discountType === "FLAT") {
+               finalPrice = finalPrice - offer.discountValue;
              }
+             appliedOffer = offer.name;
+             break;
            }
-           finalPrice = Math.max(0, Math.round(finalPrice));
+         }
+         finalPrice = Math.max(0, Math.round(finalPrice));
 
-           let includedNames = "";
-           if (c.items && c.items.length > 0) {
-               includedNames = c.items.map(i => i.item && i.item.name ? i.item.name : "").filter(Boolean).join(" + ");
-           }
+         let includedNames = "";
+         if (c.items && c.items.length > 0) {
+             includedNames = c.items.map(i => i.item && i.item.name ? i.item.name : "").filter(Boolean).join(" + ");
+         }
 
-           return {
-               _id: c._id,
-               name: `${c.name}`, 
-               basePrice: finalPrice,
-               originalPrice: originalPrice,
-               category: "combos_virtual",
-               maxAllowed: 10, 
-               availableNow: 10,
-               isCombo: true,
-               offerName: appliedOffer,
-               includedItems: includedNames 
-           };
-        });
-        items.push(...comboItems);
-    } catch(e) {}
-  }
+         return {
+             _id: c._id,
+             name: `${c.name}`, 
+             basePrice: finalPrice,
+             originalPrice: originalPrice,
+             category: "combos_virtual",
+             maxAllowed: 10, 
+             availableNow: 10,
+             isCombo: true,
+             offerName: appliedOffer,
+             includedItems: includedNames 
+         };
+      });
+      items.push(...comboItems);
+  } catch(e) { console.log("Combo fetch error:", e); }
 
   return items;
 }
