@@ -9,5 +9,6 @@ router.use(authorizeRoles("admin","manager"));
 router.post("/", riderController.createRider);
 router.get("/", riderController.getRiders);
 router.put("/:id", riderController.updateRider);
+router.delete("/:id",riderController.deleteRider);
 
 module.exports = router;

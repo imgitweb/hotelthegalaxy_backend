@@ -1,4 +1,5 @@
 const Staff = require("../../models/staffModel");
+const Rider = require("../../models/rider.model"); // Rider model import
 const mongoose = require("mongoose");
 
 exports.createStaff = async (req, res, next) => {
@@ -11,11 +12,22 @@ exports.createStaff = async (req, res, next) => {
         message: "All required fields must be provided",
       });
     }
-    const existing = await Staff.findOne({ phone });
-    if (existing) {
+
+    // 1. Check if number is already registered as a Staff
+    const existingStaff = await Staff.findOne({ phone });
+    if (existingStaff) {
       return res.status(409).json({
         success: false,
         message: "Staff already exists with this phone",
+      });
+    }
+
+    // 2. Check if number is already registered as a Rider
+    const existingRider = await Rider.findOne({ phone });
+    if (existingRider) {
+      return res.status(409).json({
+        success: false,
+        message: "This number is already registered as a Rider",
       });
     }
 
@@ -37,26 +49,40 @@ exports.createStaff = async (req, res, next) => {
   }
 };
 
+
+
+
 exports.getStaff = async (req, res, next) => {
   try {
-    let { page = 1, limit = 10, search = "" } = req.query;
+    // Frontend se page, limit, search aur department parameters aayenge
+    let { page = 1, limit = 20, search = "", department = "" } = req.query;
 
     page = parseInt(page);
     limit = parseInt(limit);
 
-    const query = {
-      isDeleted: false,
-      $or: [
+    // Default query: Sirf active staff
+    const query = { isDeleted: false };
+
+    // Agar search param hai, toh Name ya Phone se filter karega
+    if (search) {
+      query.$or = [
         { name: { $regex: search, $options: "i" } },
         { phone: { $regex: search, $options: "i" } },
-      ],
-    };
+      ];
+    }
 
+    // Agar department filter select kiya gaya hai
+    if (department && department !== "All") {
+      query.department = department;
+    }
+
+    // Pagination aur Sorting ke saath data fetch
     const staff = await Staff.find(query)
       .skip((page - 1) * limit)
       .limit(limit)
       .sort({ createdAt: -1 });
 
+    // Total documents count (Pagination buttons ke liye zaroori hai)
     const total = await Staff.countDocuments(query);
 
     return res.json({
@@ -66,6 +92,7 @@ exports.getStaff = async (req, res, next) => {
         total,
         page,
         pages: Math.ceil(total / limit),
+        limit
       },
     });
   } catch (err) {
@@ -73,6 +100,8 @@ exports.getStaff = async (req, res, next) => {
     next(err);
   }
 };
+
+// ... (Baki createStaff, updateStaff, deleteStaff pehle jaise hi rahenge)
 
 exports.updateStaff = async (req, res, next) => {
   try {

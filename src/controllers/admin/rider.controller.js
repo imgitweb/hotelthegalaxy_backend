@@ -1,4 +1,5 @@
 const Rider = require("../../models/rider.model");
+const Staff = require("../../models/staffModel"); // Staff model import
 const bcrypt = require("bcryptjs");
 
 const generatePassword = () => {
@@ -9,12 +10,21 @@ exports.createRider = async (req, res, next) => {
   try {
     const { name, phone, vehicleNumber } = req.body;
 
-    // Check if rider already exists
+    // 1. Check if rider already exists
     const existingRider = await Rider.findOne({ phone });
     if (existingRider) {
       return res.status(400).json({
         success: false,
         message: "Rider with this phone number already exists",
+      });
+    }
+
+    // 2. Check if the phone is already registered as a Staff member
+    const existingStaff = await Staff.findOne({ phone });
+    if (existingStaff) {
+      return res.status(400).json({
+        success: false,
+        message: "This number is already registered as a Staff member",
       });
     }
 
@@ -78,6 +88,21 @@ exports.updateRider = async (req, res, next) => {
     }
 
     res.json({ success: true, data: rider });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// NEW: Delete Rider Controller
+exports.deleteRider = async (req, res, next) => {
+  try {
+    const rider = await Rider.findByIdAndDelete(req.params.id);
+
+    if (!rider) {
+      return res.status(404).json({ success: false, message: "Rider not found" });
+    }
+
+    res.json({ success: true, message: "Rider deleted successfully" });
   } catch (err) {
     next(err);
   }
