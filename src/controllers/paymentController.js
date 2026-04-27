@@ -9,72 +9,273 @@ const Address = require("../models/User/address");
 const { sendTextMessage, sendInteractiveMessage } = require("../langraph/services/whatsappService");
 const { generateOTP, hashOTP } = require("../utils/otp");
 const { sendAuthTemplate } = require("../utils/whatsaap/sendAuthTemplate");
-
+const MenuItem = require("../models/dining/menuItemmodel"); // path apna dekh
+const DeliverySetting = require("../models/Setting"); // path apna dekh
 
 const  CouponUsage =  require("../models/couponUsageModel.js");
 const Coupon =  require("../models/couponModel.js")
 
 
+// exports.createOrder = async (req, res, next) => {
+
+  
+//   try {
+//     const { items, addressId, noContact, total, couponCode ,couponDiscount = 0 } = req.body;
+//     console.log("this is order data ", req.body);
+//     const userId = req.userId;
+
+//     if (!items || items.length === 0) {
+//       return res.status(400).json({
+//         success: false,
+//         message: "Order must contain at least one item",
+//       });
+//     }
+
+//     if (!addressId) {
+//       return res.status(400).json({
+//         success: false,
+//         message: "Delivery address is required",
+//       });
+//     }
+
+//     const address = await Address.findById(addressId);
+
+//     if (!address || address.user?.toString() !== userId?.toString()) {
+//       return res.status(403).json({
+//         success: false,
+//         message: "Invalid delivery address",
+//       });
+//     }
+
+//     if (!total || total <= 0) {
+//       return res.status(400).json({
+//         success: false,
+//         message: "Invalid total amount",
+//       });
+//     }
+
+//     // 1. User fetch karein mobile number ke liye
+//     const user = await User.findById(userId);
+//     if (!user) {
+//       return res.status(404).json({
+//         success: false,
+//         message: "User not found",
+//       });
+//     }
+
+//     // Last 4 digits extract karna
+//     const mobileString = (user.phone || user.mobile || "0000").toString();
+//     const lastFourDigits = mobileString.slice(-4).padStart(4, "0");
+
+//     // 2. Sirf IS USER ke WEB orders count karna
+//     // $regex: '^ORD-Web-' ensure karta hai ki agar usne WhatsApp se order kiya ho to wo isme count na ho
+//     const userWebOrderCount = await Order.countDocuments({
+//       user: userId,
+//       orderNumber: { $regex: '^ORD-Web-' } 
+//     });
+    
+//     // User ke order count mein +1 karke 4 digits ka sequence banana
+//     const sequenceNumber = (userWebOrderCount + 1).toString().padStart(4, "0");
+
+//     // 3. Final Order Number banana
+//     const generatedOrderNumber = `ORD-Web-${lastFourDigits}-${sequenceNumber}`;
+
+//     const updatedItems = items.map((item) => ({
+//       ...item,
+//       total: item.price * item.quantity,
+//     }));
+
+//     const newOrder = new Order({
+//       orderNumber: generatedOrderNumber, // "ORD-Web-5563-0001" format
+//       user: userId,
+//       items: updatedItems,
+//       address: {
+//         street: address.street,
+//         landmark: address.landmark,
+//         lat: address.lat,
+//         lng: address.lng,
+//         location: address.location,
+//       },
+//       pricing: {
+//         total,
+//       },
+//       noContact: noContact || false,
+//       status: "pending",
+//       payment: {
+//         status: "pending",
+//       },
+//     });
+
+//     const savedOrder = await newOrder.save();
+
+//    const couponDoc = await Coupon.findOne({ code: couponCode });
+
+// console.log("Coupon Code:", couponCode);
+// console.log("Coupon Doc:", couponDoc);
+
+// if (couponDoc && couponCode) {
+//   const usage = await CouponUsage.create({
+//     coupon: couponDoc._id,
+//     user: userId,
+//     orderId: savedOrder._id, // ✅ FIXED
+//     discountApplied: couponDiscount,
+//   });
+
+//   console.log("CouponUsage Saved:", usage);
+// } else {
+//   console.log("Coupon NOT FOUND ❌");
+// }
+
+ 
+//     let razorpayOrder;
+//     try {
+//       razorpayOrder = await razorpay.orders.create({
+//         amount: Math.round(total) * 100, // paise mein
+//         currency: "INR",
+//         receipt: `receipt_${savedOrder._id}`,
+//       });
+//     } catch (err) {
+//       await Order.findByIdAndDelete(savedOrder._id);
+//       console.error("Razorpay order creation failed:", err);
+//       return res.status(502).json({
+//         success: false,
+//         message: "Payment gateway error. Please try again.",
+//       });
+//     }
+
+//     await Payment.create({
+//       order: savedOrder._id,
+//       amount: total,
+//       gateway: "RAZORPAY",
+//       status: "PENDING",
+//       metadata: {
+//         razorpayOrderId: razorpayOrder.id,
+//         receipt: razorpayOrder.receipt,
+//       },
+//     });
+
+//     res.status(201).json({
+//       success: true,
+//       message: "Order created successfully. Proceed with payment.",
+//       data: savedOrder,
+//       razorpayOrder,
+//     });
+//   } catch (err) {
+//     console.error("Create Order Error:", err.message);
+//     next(err);
+//   }
+// };
+
+
+exports.previewTaxes = async (req, res, next) => {
+  try {
+    const { items } = req.body;
+
+    const settings = await DeliverySetting.findOne();
+    const foodGSTPercent = settings?.gst?.foodGSTPercent ?? 5;
+
+    let taxableAmount = 0;
+
+    // for (const item of items) {
+    //   const menuItem = await MenuItem.findById(item.menuItem)
+    //     .populate({
+    
+
+
+    for (const item of items) {
+  const menuItem = await MenuItem.findById(item.menuItem)
+    .populate({
+      path: "subCategory",
+      populate: { path: "category" },
+    });
+
+  // ✅ YEH LOG ADD KAR
+  console.log(`🍽️ Item: ${item.menuItem}`);
+  console.log(`   subCategory: ${menuItem?.subCategory?.name}`);
+  console.log(`   category: ${menuItem?.subCategory?.category?.name}`);
+
+  const categoryName = menuItem?.subCategory?.category?.name?.toLowerCase().trim();
+  console.log(`   categoryName (lowercase): "${categoryName}"`);
+
+ if (categoryName !== "beverage") {
+    taxableAmount += item.price * item.quantity;
+  }
+}
+
+    const taxes = Math.round(taxableAmount * (foodGSTPercent / 100));
+
+    res.json({ success: true, taxes });
+  } catch (err) {
+    console.error("Preview taxes error:", err.message);
+    next(err);
+  }
+};
+
+
+
 exports.createOrder = async (req, res, next) => {
   try {
-    const { items, addressId, noContact, total, couponCode ,couponDiscount = 0 } = req.body;
+    const { items, addressId, noContact, total, couponCode, couponDiscount = 0 } = req.body;
     console.log("this is order data ", req.body);
     const userId = req.userId;
 
     if (!items || items.length === 0) {
-      return res.status(400).json({
-        success: false,
-        message: "Order must contain at least one item",
-      });
+      return res.status(400).json({ success: false, message: "Order must contain at least one item" });
     }
 
     if (!addressId) {
-      return res.status(400).json({
-        success: false,
-        message: "Delivery address is required",
-      });
+      return res.status(400).json({ success: false, message: "Delivery address is required" });
     }
 
     const address = await Address.findById(addressId);
-
     if (!address || address.user?.toString() !== userId?.toString()) {
-      return res.status(403).json({
-        success: false,
-        message: "Invalid delivery address",
-      });
+      return res.status(403).json({ success: false, message: "Invalid delivery address" });
     }
 
     if (!total || total <= 0) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid total amount",
-      });
+      return res.status(400).json({ success: false, message: "Invalid total amount" });
     }
 
-    // 1. User fetch karein mobile number ke liye
     const user = await User.findById(userId);
     if (!user) {
-      return res.status(404).json({
-        success: false,
-        message: "User not found",
-      });
+      return res.status(404).json({ success: false, message: "User not found" });
     }
 
-    // Last 4 digits extract karna
+    // ─── Admin se GST fetch karo ───────────────────────
+    const settings = await DeliverySetting.findOne();
+    const foodGSTPercent = settings?.gst?.foodGSTPercent ?? 5;
+
+    // ─── Beverage check karke taxable amount nikalo ────
+    let taxableAmount = 0;
+
+    for (const item of items) {
+      const menuItem = await MenuItem.findById(item.menuItem)
+        .populate({
+          path: "subCategory",
+          populate: { path: "category" }
+        });
+
+      const categoryName = menuItem?.subCategory?.category?.name?.toLowerCase().trim();
+      console.log(`🍽️ Item: ${item.name} | Category: ${categoryName}`);
+
+     if (categoryName !== "beverage") {
+        taxableAmount += item.price * item.quantity;
+      }
+    }
+
+    const taxes = Math.round(taxableAmount * (foodGSTPercent / 100));
+    console.log(`🧾 GST: ${foodGSTPercent}% | Taxable: ₹${taxableAmount} | Tax: ₹${taxes}`);
+    // ───────────────────────────────────────────────────
+
+    // Order Number generate karo
     const mobileString = (user.phone || user.mobile || "0000").toString();
     const lastFourDigits = mobileString.slice(-4).padStart(4, "0");
 
-    // 2. Sirf IS USER ke WEB orders count karna
-    // $regex: '^ORD-Web-' ensure karta hai ki agar usne WhatsApp se order kiya ho to wo isme count na ho
     const userWebOrderCount = await Order.countDocuments({
       user: userId,
-      orderNumber: { $regex: '^ORD-Web-' } 
+      orderNumber: { $regex: '^ORD-Web-' }
     });
-    
-    // User ke order count mein +1 karke 4 digits ka sequence banana
     const sequenceNumber = (userWebOrderCount + 1).toString().padStart(4, "0");
-
-    // 3. Final Order Number banana
     const generatedOrderNumber = `ORD-Web-${lastFourDigits}-${sequenceNumber}`;
 
     const updatedItems = items.map((item) => ({
@@ -82,8 +283,10 @@ exports.createOrder = async (req, res, next) => {
       total: item.price * item.quantity,
     }));
 
+    const subtotal = items.reduce((acc, i) => acc + i.price * i.quantity, 0);
+
     const newOrder = new Order({
-      orderNumber: generatedOrderNumber, // "ORD-Web-5563-0001" format
+      orderNumber: generatedOrderNumber,
       user: userId,
       items: updatedItems,
       address: {
@@ -94,50 +297,46 @@ exports.createOrder = async (req, res, next) => {
         location: address.location,
       },
       pricing: {
+        subtotal,   // ✅ subtotal save
+        taxes,      // ✅ backend calculated GST (beverages excluded)
         total,
       },
       noContact: noContact || false,
       status: "pending",
-      payment: {
-        status: "pending",
-      },
+      payment: { status: "pending" },
     });
 
     const savedOrder = await newOrder.save();
 
-   const couponDoc = await Coupon.findOne({ code: couponCode });
+    // Coupon usage save karo
+    const couponDoc = await Coupon.findOne({ code: couponCode });
+    console.log("Coupon Code:", couponCode);
+    console.log("Coupon Doc:", couponDoc);
 
-console.log("Coupon Code:", couponCode);
-console.log("Coupon Doc:", couponDoc);
+    if (couponDoc && couponCode) {
+      const usage = await CouponUsage.create({
+        coupon: couponDoc._id,
+        user: userId,
+        orderId: savedOrder._id,
+        discountApplied: couponDiscount,
+      });
+      console.log("CouponUsage Saved:", usage);
+    } else {
+      console.log("Coupon NOT FOUND ❌");
+    }
 
-if (couponDoc && couponCode) {
-  const usage = await CouponUsage.create({
-    coupon: couponDoc._id,
-    user: userId,
-    orderId: savedOrder._id, // ✅ FIXED
-    discountApplied: couponDiscount,
-  });
-
-  console.log("CouponUsage Saved:", usage);
-} else {
-  console.log("Coupon NOT FOUND ❌");
-}
-
- 
+    // Razorpay order create karo
     let razorpayOrder;
     try {
       razorpayOrder = await razorpay.orders.create({
-        amount: Math.round(total) * 100, // paise mein
+        amount: Math.round(total) * 100,
         currency: "INR",
         receipt: `receipt_${savedOrder._id}`,
       });
     } catch (err) {
       await Order.findByIdAndDelete(savedOrder._id);
       console.error("Razorpay order creation failed:", err);
-      return res.status(502).json({
-        success: false,
-        message: "Payment gateway error. Please try again.",
-      });
+      return res.status(502).json({ success: false, message: "Payment gateway error. Please try again." });
     }
 
     await Payment.create({
@@ -156,13 +355,14 @@ if (couponDoc && couponCode) {
       message: "Order created successfully. Proceed with payment.",
       data: savedOrder,
       razorpayOrder,
+      taxes, // ✅ frontend ko bhi bhejo
     });
+
   } catch (err) {
     console.error("Create Order Error:", err.message);
     next(err);
   }
 };
-
 
 exports.verifyPayment = async (req, res, next) => {
   try {

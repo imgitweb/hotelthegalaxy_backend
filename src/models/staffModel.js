@@ -13,15 +13,16 @@ const staffSchema = new mongoose.Schema(
       required: true,
       unique: true, 
     },
-    department: {
-      type: String,
-      enum: Object.keys(ROLE_MAP),
-      required: true,
-    },
-    role: {
-      type: String,
-      required: true,
-    },
+ department: {
+  type: String,
+  required: true,
+  trim: true,
+},
+
+role: {
+  type: String,
+  required: true,
+},
     photo: {
       type: String,
       default: null,
@@ -32,7 +33,7 @@ const staffSchema = new mongoose.Schema(
       trim: true,
     },
     
-    // ✅ ADDED "Available" and "Offline" to support toggle logic
+  
     status: {
       type: String,
       enum: ["Present", "Absent", "On Leave", "Available", "Offline"],

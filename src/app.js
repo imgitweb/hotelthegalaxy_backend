@@ -42,6 +42,7 @@ const adminSettingRoutes = require("./routes/adminSettingRoutes")
 const attendanceRoutes = require("./routes/attendanceRoutes");
 const deliverySettingRoutes = require("./routes/admin/deliverySettingRoutes")
 const checkItemAvailability = require("./routes/roster.routes.js")
+const departmentRoutes = require("./routes/admin/departmentRoutes.js")
 
 
 const couponRoutes = require("./routes/couponRoutes.js");
@@ -150,7 +151,7 @@ app.use("/api/v1/rooms", roomRoutes);
 app.use("/api/v1/staffAttendance",staffAttendance);
 app.use("/api/v1/admin/staff", staffRoutes);
 app.use("/api/v1/settings", deliverySettingRoutes)
-
+app.use("/api/v1/admin/departments",departmentRoutes),
 app.use("/api/v1/admin/coupons", couponRoutes);
 app.use("/api/v1/admin/attendance", attendanceRoutes);
 
