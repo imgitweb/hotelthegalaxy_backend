@@ -62,6 +62,7 @@ const allowedOrigins = [
   "https://www.admin.hotelthegalaxy.in",
   "http://192.168.0.126:3000",
   "https://point-spread-souls-norm.trycloudflare.com",
+  "wss://admin.hotelthegalaxy.in/*"
 ].filter(Boolean);
 const corsOptions = {
   origin: function (origin, callback) {
