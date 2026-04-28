@@ -30,11 +30,11 @@ exports.updateSettings = async (req, res) => {
 
     // 🧹 delete old image
     if (settings?.avatar) {
-      const oldPath = path.join(
-        __dirname,
-        "../public",
-        settings.avatar
-      );
+ const oldPath = path.join(
+  __dirname,
+  "../../public",
+  settings.avatar.replace("/uploads", "uploads")
+);
 
       if (fs.existsSync(oldPath)) {
         fs.unlinkSync(oldPath);
