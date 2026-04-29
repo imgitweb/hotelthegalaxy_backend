@@ -9,6 +9,7 @@ const Address = require("../models/User/address");
 const { sendTextMessage, sendInteractiveMessage } = require("../langraph/services/whatsappService");
 const { generateOTP, hashOTP } = require("../utils/otp");
 const { sendAuthTemplate } = require("../utils/whatsaap/sendAuthTemplate");
+const {sendWhatsAppMessage} = require("./../utils/whatsaap/sendTemplate.js")
 const MenuItem = require("../models/dining/menuItemmodel"); // path apna dekh
 const DeliverySetting = require("../models/Setting"); // path apna dekh
 
@@ -515,8 +516,18 @@ exports.verifyPayment = async (req, res, next) => {
 
       try {
         // 🛠️ FIXED: Now we send it using the properly extracted userPhone
-        const response = await sendAuthTemplate(userPhone, otp);
+        const response = await sendWhatsAppMessage({
+          to: userPhone,
+          type: "template",
+          templateName: "order_confirmed_otp",
+          parameters: [
+            updatedOrder.orderNumber || updatedOrder._id, // {{1}}
+            otp                                           // {{2}}
+          ]
+        });
+
         console.log("📲 WhatsApp OTP Response:", response);
+      
       } catch (err) {
         console.error("❌ WhatsApp Error:", err.message);
       }
