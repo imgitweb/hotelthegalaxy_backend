@@ -502,7 +502,7 @@ exports.handleWebhook = async (req, res) => {
         // 🔥 SEND ORDER CONFIRMATION MESSAGE
         const orderNumber = updatedOrder.orderNumber || updatedOrder._id.toString().slice(-6).toUpperCase();
 
-        const msg = `🎉 *Order Confirmed!*\n\n🧾 Order: ${orderNumber}\n\n🔐 OTP: ${otp}\n\n⚠️ Delivery ke time rider ko OTP batana hai.`;
+        const msg = `🎉 *Order Confirmed!*\n\n🧾 Order: ${orderNumber}\n\n🔐 OTP: ${otp}\n\n⚠️ Please share this OTP with the delivery partner at the time of delivery.`;
 
         const interactiveMsg = {
           type: "button",

@@ -3,6 +3,7 @@ const { getIO } = require("../../config/socket");
 const Trip = require("../../models/TripModel");
 const Rider = require("../../models/rider.model");
 const { generateOTPMap } = require("../../utils/otp");
+const { sendTextMessage }  = require("../../langraph/services/whatsappService")
 const STATUS_FLOW = {
   pending: ["confirmed", "cancelled"],
   confirmed: ["preparing", "out_for_delivery", "cancelled"],
@@ -204,6 +205,7 @@ exports.cancelOrder = async (req, res, next) => {
   }
 };
 
+
 exports.assignRider = async (req, res, next) => {
   try {
     const { riderId } = req.body;
@@ -223,7 +225,7 @@ exports.assignRider = async (req, res, next) => {
     }
 
     // Populate user and rider info so we can send complete data via socket if needed
-    const order = await Order.findById(req.params.id).populate("user", "name email phone");
+    const order = await Order.findById(req.params.id).populate("user", "fullName email phone");
 
     if (!order) {
       console.log("❌ Order not found");
@@ -232,7 +234,19 @@ exports.assignRider = async (req, res, next) => {
         message: "Order not found",
       });
     }
-    
+
+    // ==========================================
+    // 🛑 NEW CHECK: ONLY ASSIGN IF STATUS IS "confirmed"
+    // ==========================================
+    if (order.status !== "confirmed") {
+      console.log(`🚫 Cannot assign rider. Current status is '${order.status}', expected 'confirmed'`);
+      return res.status(400).json({
+        success: false,
+        message: `Rider can only be assigned when the order is confirmed. Current status: ${order.status}`,
+      });
+    }
+    // ==========================================
+
     if (FINAL_STATES.includes(order.status)) {
       console.log("🚫 Cannot assign rider to final state");
       return res.status(400).json({
@@ -250,8 +264,8 @@ exports.assignRider = async (req, res, next) => {
     }
 
     order.rider = riderId;
-
     console.log("✅ Rider assigned");
+
     if (!["delivered", "cancelled"].includes(order.status)) {
       if (order.status !== "out_for_delivery") {
         order.status = "out_for_delivery";
@@ -276,7 +290,7 @@ exports.assignRider = async (req, res, next) => {
           .toString(36)
           .substr(2, 9)
           .toUpperCase()}`;
-        const otpMap = generateOTPMap([order._id.toString()]);
+        // const otpMap = generateOTPMap([order._id.toString()]); // Uncomment if needed
 
         const trip = await Trip.create({
           tripId,
@@ -286,14 +300,6 @@ exports.assignRider = async (req, res, next) => {
           // orderOtps: otpMap,
           totalEarnings: order.pricing?.total || 0,
         });
-
-        // order.deliveryOTP = {
-        //   code: otpMap[order._id.toString()],
-        //   generatedAt: new Date(),
-        //   verifiedAt: null,
-        //   attempts: 0,
-        //   maxAttempts: 3,
-        // };
 
         await Rider.findByIdAndUpdate(order.rider, {
           status: "On-Trip",
@@ -307,6 +313,35 @@ exports.assignRider = async (req, res, next) => {
 
     await order.save();
     console.log("💾 Order saved after rider assignment");
+    
+    // ============================
+    // 📩 SEND WHATSAPP MESSAGE TO RIDER
+    // ============================
+    try {
+      const rider = await Rider.findById(riderId);
+
+      if (rider?.phone) {
+        const customerName = order.user?.fullName || order.user?.name || "Customer";
+        const customerPhone = order.user?.phone || "N/A";
+
+        const street = order.address?.street || "N/A";
+        const landmark = order.address?.landmark || "N/A";
+
+        const message = `🚴 New Order Assigned\n\n📦 Order Number: ${order.orderNumber}\n\n🧑 Customer: ${customerName}\n📞 Phone: ${customerPhone}\n\n📍 Address Details:\n🏠 Street: ${street}\n📌 Landmark: ${landmark}\n\n👉 Please start delivery now.`;
+
+        const result = await sendTextMessage(rider.phone, message);
+
+        if (result.success) {
+          console.log("✅ WhatsApp message sent to rider");
+        } else {
+          console.log("❌ WhatsApp failed:", result.error);
+        }
+      } else {
+        console.log("❌ Rider phone not found");
+      }
+    } catch (err) {
+      console.error("⚠️ WhatsApp error:", err.message);
+    }
 
     // ============================
     // ⚡ WEBSOCKET EMIT (ASSIGN RIDER)
