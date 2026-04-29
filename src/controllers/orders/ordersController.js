@@ -213,15 +213,62 @@ exports.getMyOrders = async (req, res, next) => {
   }
 };
 
+// exports.getOrderById = async (req, res, next) => {
+//   try {
+//     const id = req.params.id;
+
+//     const isMongoId = /^[0-9a-fA-F]{24}$/.test(id);
+
+//     const order = await Order.findOne(isMongoId ? { _id: id } : { orderId: id })
+//       .populate("items.menuItem", "name basePrice images")
+//       .populate("items.combo", "name price image");
+
+//     if (!order) {
+//       return res.status(404).json({
+//         success: false,
+//         message: "Order not found",
+//       });
+//     }
+
+//     if (!req.userId || order.user.toString() !== req.userId) {
+//       return res.status(403).json({
+//         success: false,
+//         message: "Not authorized",
+//       });
+//     }
+
+//     const etaData = await calculateETA(order);
+//     order.eta = etaData.eta;
+//     order.distanceKm = etaData.distanceKm;
+
+//     await order.save();
+
+//     res.status(200).json({
+//       success: true,
+//       data: order,
+//     });
+//   } catch (error) {
+//     console.error("Get Order By ID Error:", error.message);
+//     next(error);
+//   }
+// };
+
+
 exports.getOrderById = async (req, res, next) => {
   try {
     const id = req.params.id;
 
     const isMongoId = /^[0-9a-fA-F]{24}$/.test(id);
 
-    const order = await Order.findOne(isMongoId ? { _id: id } : { orderId: id })
+    const order = await Order.findOne(
+      isMongoId ? { _id: id } : { orderNumber: id } // ⚠️ FIX: orderId → orderNumber
+    )
       .populate("items.menuItem", "name basePrice images")
-      .populate("items.combo", "name price image");
+      .populate("items.combo", "name price image")
+      .populate({
+        path: "rider",
+        select: "name phone vehicleNumber status",
+      });
 
     if (!order) {
       return res.status(404).json({
@@ -230,6 +277,7 @@ exports.getOrderById = async (req, res, next) => {
       });
     }
 
+    // 🔒 Authorization check
     if (!req.userId || order.user.toString() !== req.userId) {
       return res.status(403).json({
         success: false,
@@ -237,7 +285,9 @@ exports.getOrderById = async (req, res, next) => {
       });
     }
 
+    // 🚀 ETA calculation
     const etaData = await calculateETA(order);
+
     order.eta = etaData.eta;
     order.distanceKm = etaData.distanceKm;
 
