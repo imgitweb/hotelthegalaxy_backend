@@ -2,6 +2,10 @@ const Staff = require("../../models/staffModel");
 const Rider = require("../../models/rider.model"); // Rider model import
 const mongoose = require("mongoose");
 
+
+const Department = require("../../models/departmentModel");
+
+
 exports.createStaff = async (req, res, next) => {
   try {
     const { name, phone, department, role, shift } = req.body;
@@ -13,7 +17,27 @@ exports.createStaff = async (req, res, next) => {
       });
     }
 
-    // 1. Check if number is already registered as a Staff
+    // ✅ Dynamic validation - DB se check karo
+    const dept = await Department.findOne({
+      name: department,
+      isDeleted: false,
+      isActive: true,
+    });
+
+    if (!dept) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid department selected",
+      });
+    }
+
+    if (!dept.roles.includes(role)) {
+      return res.status(400).json({
+        success: false,
+        message: `Invalid role for department ${department}`,
+      });
+    }
+
     const existingStaff = await Staff.findOne({ phone });
     if (existingStaff) {
       return res.status(409).json({
@@ -22,7 +46,6 @@ exports.createStaff = async (req, res, next) => {
       });
     }
 
-    // 2. Check if number is already registered as a Rider
     const existingRider = await Rider.findOne({ phone });
     if (existingRider) {
       return res.status(409).json({
@@ -31,23 +54,16 @@ exports.createStaff = async (req, res, next) => {
       });
     }
 
-    const staff = await Staff.create({
-      name,
-      phone,
-      department,
-      role,
-      shift,
-    });
+    const staff = await Staff.create({ name, phone, department, role, shift });
 
-    return res.status(201).json({
-      success: true,
-      data: staff,
-    });
+    return res.status(201).json({ success: true, data: staff });
   } catch (err) {
     console.error("❌ createStaff Error:", err);
     next(err);
   }
 };
+
+// getStaff, updateStaff, deleteStaff, getSingleStaff - same rahenge
 
 
 

@@ -42,6 +42,7 @@ const adminSettingRoutes = require("./routes/adminSettingRoutes")
 const attendanceRoutes = require("./routes/attendanceRoutes");
 const deliverySettingRoutes = require("./routes/admin/deliverySettingRoutes")
 const checkItemAvailability = require("./routes/roster.routes.js")
+const departmentRoutes = require("./routes/admin/departmentRoutes.js")
 
 
 const couponRoutes = require("./routes/couponRoutes.js");
@@ -61,6 +62,7 @@ const allowedOrigins = [
   "https://www.admin.hotelthegalaxy.in",
   "http://192.168.0.126:3000",
   "https://point-spread-souls-norm.trycloudflare.com",
+  "wss://admin.hotelthegalaxy.in/*"
 ].filter(Boolean);
 const corsOptions = {
   origin: function (origin, callback) {
@@ -104,11 +106,11 @@ if (process.env.NODE_ENV === "development") {
 
 app.use(
   "/uploads",
-  express.static(path.join(__dirname, "..", "/public/uploads"))
+  express.static(path.join(__dirname,  "../public/uploads"))
 );
 console.log(
   "Serving static files from:",
-  path.join(__dirname, "..", "/public/uploads")
+  path.join(__dirname,  "../public/uploads")
 );
 
 // ========================================================
@@ -150,7 +152,7 @@ app.use("/api/v1/rooms", roomRoutes);
 app.use("/api/v1/staffAttendance",staffAttendance);
 app.use("/api/v1/admin/staff", staffRoutes);
 app.use("/api/v1/settings", deliverySettingRoutes)
-
+app.use("/api/v1/admin/departments",departmentRoutes),
 app.use("/api/v1/admin/coupons", couponRoutes);
 app.use("/api/v1/admin/attendance", attendanceRoutes);
 
