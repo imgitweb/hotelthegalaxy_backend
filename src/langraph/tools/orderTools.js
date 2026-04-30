@@ -542,7 +542,7 @@ async function getCartSummaryText(phone, couponCode = null) {
 
   let text = `🛒 *Aapka Cart:*\n${cartSummary}\n\n🧾 Subtotal: ₹${subtotal}\n`;
   if (discountMsg) text += discountMsg;
-  text += `🍲 Food GST: ₹${foodGST}\n🚚 Est. Delivery: ${deliveryMsg}\n💰 Est. Total: ₹${estTotal}\n\n💡 *If you want to remove an item, type: 'Remove 1 <item name>'*\n\nAur kuch chahiye ya checkout karein?`;
+  text += `🍲 Food GST: ₹${foodGST}\n🚚 Est. Delivery: ${deliveryMsg}\n💰 Est. Total: ₹${estTotal}\n\n💡 *Agar aapko koi item hatana hai, toh type karein: 'Remove 1 <item name>'*\n\nAur kuch chahiye ya checkout karein?`;
 
   return { isEmpty: false, text, hasCoupon: !!discountMsg };
 }

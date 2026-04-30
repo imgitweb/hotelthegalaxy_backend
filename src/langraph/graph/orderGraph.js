@@ -237,8 +237,7 @@ async function actionExecutionNode(state) {
         user = await registerNewUser(phone, "Guest");
     } else {
         // 🔥 FIX: Website Link Included
-        let replyText = `👑 *Welcome to Hotel The Galaxy!*\n🌐 Website: https://hotelthegalaxy.in\n${availStatus.message}\n\nKripya apna naam type karke bhejein,\ntaaki hum aapko behtar serve kar sakein.`;
-        userContextMemory[phone] = replyText;
+      let replyText = `👑 *Welcome to Hotel The Galaxy!*\n🌐 Aap website se bhi order kar sakte hain: https://hotelthegalaxy.in\n\n${availStatus.message}\n\nKripya apna naam type karke bhejein,\ntaaki hum aapko behtar serve kar sakein.`;        userContextMemory[phone] = replyText;
         
         let interactive = { 
           type: "button", 
@@ -268,8 +267,8 @@ async function actionExecutionNode(state) {
     case "PROVIDE_NAME": {
       const extractedName = aiData?.user_name || inputText.trim() || "Guest";
       if (!user) user = await registerNewUser(phone, extractedName);
-      // 🔥 FIX: Website Link Included
-      replyText = `👑 *Welcome back, ${user.fullName}!*\n🌐 Website: https://hotelthegalaxy.in\n${availStatus.message}\n\nAaj aap kya order karna chahenge?`;
+      // 🔥 FIX: Website Link Included properly
+      replyText = `Aapse milkar accha laga, *${user.fullName}*! 👑\n🌐 Aap website se bhi order kar sakte hain: https://hotelthegalaxy.in\n\n${availStatus.message}\n\nAaj aap kya order karna chahenge?`;
       interactive = { 
         type: "button", 
         header: { type: "image", image: { link: HOTEL_LOGO_URL } },
@@ -278,10 +277,11 @@ async function actionExecutionNode(state) {
       };
       break;
     }
+
     case "GREETING": {
       const activeOrders = await getActiveOrdersToday(user._id);
-      // 🔥 FIX: Website Link Included
-      replyText = `👑 *Welcome back, ${user.fullName}!*\n🌐 Website: https://hotelthegalaxy.in\n${availStatus.message}\n\nHotel The Galaxy mein aapka swagat hai.\nAaj kya order karna chahenge aap?`;
+      // 🔥 FIX: Website Link Included properly
+      replyText = `👑 *Welcome back, ${user.fullName}!*\n🌐 Aap website se bhi order kar sakte hain: https://hotelthegalaxy.in\n\n${availStatus.message}\n\nHotel The Galaxy mein aapka swagat hai.\nAaj kya order karna chahenge aap?`;
       let buttons = [{ type: "reply", reply: { id: "btn_menu", title: "🍔 Menu" } }];
       if (activeOrders && activeOrders.length > 0) { buttons.push({ type: "reply", reply: { id: "btn_track", title: "📦 Track" } }); }
       buttons.push({ type: "reply", reply: { id: "btn_offers", title: "🎁 Offers" } });
@@ -295,6 +295,7 @@ async function actionExecutionNode(state) {
       };
       break;
     }
+    
     case "HELP": {
       replyText = `🎧 *Hotel The Galaxy Support*\n\n📞 Call karein: +916262633305\n📧 Email: gmhotelthegalaxy@gmail.com\n\n*(Upar diye number par tap karke aap direct call kar sakte hain!)*`;
       interactive = { type: "button", body: { text: replyText }, action: { buttons: [ { type: "reply", reply: { id: "btn_menu", title: "🍔 Menu" } }, { type: "reply", reply: { id: "btn_offers", title: "🎁 Offers" } } ] } };
