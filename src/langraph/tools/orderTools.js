@@ -352,6 +352,7 @@ async function getAvailableCategoriesToday() {
 async function getMenuByCategory(categoryId) { 
   try {
     const rosterItems = await getTodayRosterItems();
+    if (!rosterItems.length) return [];
     
     if (categoryId === "combos_virtual") {
        return rosterItems.filter(item => item.isCombo);
@@ -473,6 +474,7 @@ async function removeItemsFromCart(phone, items) {
   return { cart: session.cart };
 }
 
+// 🔥 FIX: GST Exemption for Beverages + Add Removal Tip
 async function getCartSummaryText(phone, couponCode = null) {
   const session = await getOrCreateSession(phone);
   const cart = session.cart || [];
@@ -483,7 +485,26 @@ async function getCartSummaryText(phone, couponCode = null) {
   const gstSet = setting.gst || { foodGSTPercent: 5, deliveryGSTPercent: 5 };
 
   let cartSummary = cart.map(item => `▪️ ${item.quantity}x ${item.name} - ₹${item.total}`).join("\n");
-  let subtotal = cart.reduce((sum, item) => sum + item.total, 0);
+  
+  // 🔥 Fetch categories and today items to check if item is Beverage
+  const categories = await Category.find({}).lean();
+  const bevCatIds = categories.filter(c => c.name.toLowerCase().includes('beverage') || c.name.toLowerCase().includes('drink') || c.name.toLowerCase().includes('shake')).map(c => String(c._id));
+  const todayItems = await getTodayRosterItems();
+
+  let taxableSubtotal = 0;
+  let subtotal = 0;
+
+  cart.forEach(item => {
+      subtotal += item.total;
+      const tItem = todayItems.find(i => String(i._id) === String(item.menuItemId));
+      let isBev = false;
+      if (tItem && !item.isCombo && tItem.category && bevCatIds.includes(String(tItem.category))) {
+          isBev = true;
+      }
+      if (!isBev) {
+          taxableSubtotal += item.total;
+      }
+  });
   
   let discountMsg = "";
   let discountAmt = 0;
@@ -510,19 +531,23 @@ async function getCartSummaryText(phone, couponCode = null) {
   }
 
   const discountedSubtotal = subtotal - discountAmt;
+  const discountRatio = subtotal > 0 ? (discountAmt / subtotal) : 0;
+  const discountedTaxableSubtotal = taxableSubtotal - (taxableSubtotal * discountRatio);
+
   const isFree = isFreeDelCoupon || dCharge.isFreeDelivery || discountedSubtotal >= (dCharge.freeDeliveryAbove || 500);
   
   let deliveryMsg = isFree ? "FREE! 🎉" : `₹${dCharge.baseFee} (Est.)`;
-  let foodGST = Math.round((discountedSubtotal * (gstSet.foodGSTPercent || 0)) / 100);
+  let foodGST = Math.round((discountedTaxableSubtotal * (gstSet.foodGSTPercent || 0)) / 100);
   let estTotal = discountedSubtotal + foodGST + (isFree ? 0 : dCharge.baseFee);
 
   let text = `🛒 *Aapka Cart:*\n${cartSummary}\n\n🧾 Subtotal: ₹${subtotal}\n`;
   if (discountMsg) text += discountMsg;
-  text += `🍲 Food GST: ₹${foodGST}\n🚚 Est. Delivery: ${deliveryMsg}\n💰 Est. Total: ₹${estTotal}\n\nAur kuch chahiye ya checkout karein?`;
+  text += `🍲 Food GST: ₹${foodGST}\n🚚 Est. Delivery: ${deliveryMsg}\n💰 Est. Total: ₹${estTotal}\n\n💡 *If you want to remove an item, type: 'Remove 1 <item name>'*\n\nAur kuch chahiye ya checkout karein?`;
 
   return { isEmpty: false, text, hasCoupon: !!discountMsg };
 }
 
+// 🔥 FIX: GST Exemption for Beverages at Checkout
 async function processBotOrderAndPayment(userId, phone, cartItems, addressId, distanceKm = null, couponCode = null) { 
   try {
     const fullAddress = await Address.findById(addressId); if (!fullAddress) return { success: false };
@@ -539,7 +564,24 @@ async function processBotOrderAndPayment(userId, phone, cartItems, addressId, di
     const dCharge = setting.deliveryCharge || { freeDeliveryAbove: 500, isFreeDelivery: false, baseDistance: 5, baseFee: 30, extraPerKmRate: 10, minCharge: 20, maxCharge: 200 };
     const gstSet = setting.gst || { foodGSTPercent: 5, deliveryGSTPercent: 5 };
 
-    const subtotal = cartItems.reduce((sum, item) => sum + item.total, 0); 
+    const categories = await Category.find({}).lean();
+    const bevCatIds = categories.filter(c => c.name.toLowerCase().includes('beverage') || c.name.toLowerCase().includes('drink') || c.name.toLowerCase().includes('shake')).map(c => String(c._id));
+    const todayItems = await getTodayRosterItems();
+
+    let taxableSubtotal = 0;
+    let subtotal = 0;
+
+    cartItems.forEach(item => {
+        subtotal += item.total;
+        const tItem = todayItems.find(i => String(i._id) === String(item.menuItemId));
+        let isBev = false;
+        if (tItem && !item.isCombo && tItem.category && bevCatIds.includes(String(tItem.category))) {
+            isBev = true;
+        }
+        if (!isBev) {
+            taxableSubtotal += item.total;
+        }
+    });
     
     let discountAmt = 0;
     let isFreeDelCoupon = false;
@@ -565,6 +607,8 @@ async function processBotOrderAndPayment(userId, phone, cartItems, addressId, di
     }
 
     const discountedSubtotal = subtotal - discountAmt;
+    const discountRatio = subtotal > 0 ? (discountAmt / subtotal) : 0;
+    const discountedTaxableSubtotal = taxableSubtotal - (taxableSubtotal * discountRatio);
 
     let deliveryCharge = 0;
     if (!isFreeDelCoupon && !dCharge.isFreeDelivery && discountedSubtotal < (dCharge.freeDeliveryAbove || 500)) {
@@ -577,7 +621,7 @@ async function processBotOrderAndPayment(userId, phone, cartItems, addressId, di
     }
     deliveryCharge = Math.round(deliveryCharge);
     
-    const foodGST = Math.round((discountedSubtotal * (gstSet.foodGSTPercent || 0)) / 100);
+    const foodGST = Math.round((discountedTaxableSubtotal * (gstSet.foodGSTPercent || 0)) / 100);
     const deliveryGST = Math.round((deliveryCharge * (gstSet.deliveryGSTPercent || 0)) / 100);
     const totalTax = foodGST + deliveryGST;
 
@@ -683,7 +727,6 @@ async function cancelOrder(userId) {
   return null; 
 }
 
-// 🔥 FIX: EXPORT YAHAN THEEK KIYA GAYA HAI
 async function getUserOrderStats(userId) { 
   try {
     const orders = await Order.find({ user: userId }); 
