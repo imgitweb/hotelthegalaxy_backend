@@ -519,7 +519,7 @@ exports.verifyPayment = async (req, res, next) => {
         const response = await sendWhatsAppMessage({
           to: userPhone,
           type: "template",
-          templateName: "order_confirmed_otp",
+          templateName: "order_otp_verification",
           parameters: [
             updatedOrder.orderNumber || updatedOrder._id, // {{1}}
             otp                                           // {{2}}

@@ -11,7 +11,8 @@ async function sendWhatsAppMessage({
   text,
   templateName,
   language = "en_US",
-  parameters = [] // ✅ add this
+  parameters = [], 
+  headerImageUrl = null // 🔥 NEW: Added support for Header Image
 }) {
   if (!TOKEN) throw new Error("Missing WHATSAPP_ACCESS_TOKEN");
   if (!PHONE_ID) throw new Error("Missing WHATSAPP_PHONE_NUMBER_ID");
@@ -24,7 +25,7 @@ async function sendWhatsAppMessage({
     recipient_type: "individual",
     to
   };
-cd  
+
   // 👉 Text message
   if (type === "text") {
     if (!text) throw new Error("Text body is required for text messages");
@@ -37,23 +38,36 @@ cd
   else if (type === "template") {
     if (!templateName) throw new Error("templateName is required");
 
+    let components = [
+      {
+        type: "body",
+        parameters: parameters.map((param) => ({
+          type: "text",
+          text: param || "User" // Fallback if parameter is empty
+        }))
+      }
+    ];
+
+    // 🔥 If an image URL is provided, attach it as a header component
+    if (headerImageUrl) {
+      components.push({
+        type: "header",
+        parameters: [
+          {
+            type: "image",
+            image: { link: headerImageUrl }
+          }
+        ]
+      });
+    }
+
     payload.type = "template";
     payload.template = {
       name: templateName,
       language: { code: language },
-      components: [
-        {
-          type: "body",
-          parameters: parameters.map((param) => ({
-            type: "text",
-            text: param
-          }))
-        }
-      ]
+      components: components
     };
-  }
-
-  else {
+  } else {
     throw new Error(`Unsupported message type: ${type}`);
   }
 
@@ -65,13 +79,13 @@ cd
       }
     });
 
-    console.log("✅ WhatsApp API Response:", res.data);
+    console.log(`✅ WhatsApp sent to ${to}`);
     return res.data;
 
   } catch (error) {
     console.error(
-      "❌ WhatsApp Error:",
-      error.response?.data || error.message
+      `❌ WhatsApp Error for ${to}:`,
+      error.response?.data?.error?.message || error.message
     );
     throw error;
   }
