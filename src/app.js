@@ -106,11 +106,11 @@ if (process.env.NODE_ENV === "development") {
 
 app.use(
   "/uploads",
-  express.static(path.join(__dirname, ".." , "/public/uploads"))
+  express.static(path.join(__dirname, ".."  , "public/uploads"))
 );
 console.log(
   "Serving static files from:",
-  path.join(__dirname,  "../public/uploads")
+  path.join(__dirname,  "..", "public/uploads")
 );
 
 // ========================================================
