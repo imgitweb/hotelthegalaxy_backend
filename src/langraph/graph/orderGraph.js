@@ -120,6 +120,11 @@ async function agentDecisionNode(state) {
     return { ...state, aiIntent: "PROVIDE_SHARED_LOCATION", aiData: { location: locationData } };
   }
 
+  // 🔥 FIX: Check if user directly triggers "Order Now"
+  if (msg === "order now" || msg.includes("order now")) {
+     return { ...state, aiIntent: "SHOW_MENU", aiData: {} };
+  }
+
   const isAskingName = previousBotMessage.includes("apna naam");
   if (isAskingName && msg.length > 0) {
     if (msg.includes("btn_") || msg.includes("skip")) {
@@ -156,7 +161,6 @@ async function agentDecisionNode(state) {
     return { ...state, aiIntent: "TRACK_ORDER", aiData: {} }; 
   }
   
-  // 🔥 FIX: Ensure ID matching works for both map_ord_ and raw exact DB ID length
   if (msg.startsWith("map_ord_")) {
     return { ...state, aiIntent: "TRACK_SPECIFIC_MAP", aiData: { order_id: rawMsg.replace("map_ord_", "") } };
   }
@@ -168,7 +172,6 @@ async function agentDecisionNode(state) {
     return { ...state, aiIntent: "PAY_SPECIFIC_ORDER", aiData: { order_id: rawMsg.replace("pay_ord_", "") } };
   }
 
-  // 🔥 FIX: Strict check for "add_" intercept
   if (msg.startsWith("add_")) {
     const itemName = rawMsg.trim().substring(4); 
     return { ...state, aiIntent: "PROMPT_QUANTITY", aiData: { item_name: itemName } };
@@ -179,7 +182,6 @@ async function agentDecisionNode(state) {
     return { ...state, aiIntent: "HANDLE_QUANTITY_SELECTION", aiData: { quantity: qty } };
   }
 
-  // 🔥 FIX: Categories robust handling
   if (msg.startsWith("cat_")) return { ...state, aiIntent: "SELECT_CATEGORY", aiData: { categoryId: msg.replace("cat_", "") } };
   if (msg.startsWith("addr_")) return { ...state, aiIntent: "SELECT_SAVED_ADDRESS", aiData: { addressId: msg.replace("addr_", "") } };
 
@@ -234,8 +236,8 @@ async function actionExecutionNode(state) {
     if (aiIntent === "SHOW_MENU" || inputText.toLowerCase().includes("skip") || inputText.toLowerCase().includes("btn_")) {
         user = await registerNewUser(phone, "Guest");
     } else {
-        // 🔥 FIX: Exact formatting
-        let replyText = `👑 *Welcome to Hotel The Galaxy!*\n${availStatus.message}\n\nKripya apna naam type karke bhejein,\ntaaki hum aapko behtar serve kar sakein.`;
+        // 🔥 FIX: Website Link Included
+        let replyText = `👑 *Welcome to Hotel The Galaxy!*\n🌐 Website: https://hotelthegalaxy.in\n${availStatus.message}\n\nKripya apna naam type karke bhejein,\ntaaki hum aapko behtar serve kar sakein.`;
         userContextMemory[phone] = replyText;
         
         let interactive = { 
@@ -266,8 +268,8 @@ async function actionExecutionNode(state) {
     case "PROVIDE_NAME": {
       const extractedName = aiData?.user_name || inputText.trim() || "Guest";
       if (!user) user = await registerNewUser(phone, extractedName);
-      // 🔥 FIX: Exact format greeting
-      replyText = `👑 *Welcome back, ${user.fullName}!*\n${availStatus.message}\n\nHotel The Galaxy mein aapka swagat hai.\nAaj kya order karna chahenge aap?`;
+      // 🔥 FIX: Website Link Included
+      replyText = `👑 *Welcome back, ${user.fullName}!*\n🌐 Website: https://hotelthegalaxy.in\n${availStatus.message}\n\nAaj aap kya order karna chahenge?`;
       interactive = { 
         type: "button", 
         header: { type: "image", image: { link: HOTEL_LOGO_URL } },
@@ -278,8 +280,8 @@ async function actionExecutionNode(state) {
     }
     case "GREETING": {
       const activeOrders = await getActiveOrdersToday(user._id);
-      // 🔥 FIX: Exact format greeting
-      replyText = `👑 *Welcome back, ${user.fullName}!*\n${availStatus.message}\n\nHotel The Galaxy mein aapka swagat hai.\nAaj kya order karna chahenge aap?`;
+      // 🔥 FIX: Website Link Included
+      replyText = `👑 *Welcome back, ${user.fullName}!*\n🌐 Website: https://hotelthegalaxy.in\n${availStatus.message}\n\nHotel The Galaxy mein aapka swagat hai.\nAaj kya order karna chahenge aap?`;
       let buttons = [{ type: "reply", reply: { id: "btn_menu", title: "🍔 Menu" } }];
       if (activeOrders && activeOrders.length > 0) { buttons.push({ type: "reply", reply: { id: "btn_track", title: "📦 Track" } }); }
       buttons.push({ type: "reply", reply: { id: "btn_offers", title: "🎁 Offers" } });

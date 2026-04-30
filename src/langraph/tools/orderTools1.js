@@ -11,11 +11,22 @@ const razorpay = require("../../config/razorpay");
 const SubCategory = require("../../models/dining/SubCategory"); 
 const Setting = require("../../models/Setting"); 
 const Combo = require("../../models/dining/combomodel"); 
-const Rider = require("../../models/rider.model")
-const Trip = require("../../models/TripModel")
-const Availability = require("../../models/availabilityModel")
+const Rider = require("../../models/rider.model");
+const Trip = require("../../models/TripModel");
+const Coupon = require("../../models/couponModel");
+const CouponUsage = require("../../models/couponUsageModel");
+const Availability = require("../../models/availabilityModel"); 
 const mongoose = require("mongoose");
 const axios = require("axios");
+
+function getISTBounds() {
+  const now = new Date();
+  const istOffset = 5.5 * 60 * 60 * 1000;
+  const istTime = new Date(now.getTime() + istOffset);
+  const startOfTodayUTC = new Date(Date.UTC(istTime.getUTCFullYear(), istTime.getUTCMonth(), istTime.getUTCDate(), 0, 0, 0, 0) - istOffset);
+  const endOfTodayUTC = new Date(Date.UTC(istTime.getUTCFullYear(), istTime.getUTCMonth(), istTime.getUTCDate(), 23, 59, 59, 999) - istOffset);
+  return { start: startOfTodayUTC, end: endOfTodayUTC, now };
+}
 
 function calculateDistance(lat1, lon1, lat2, lon2) {
   if (!lat1 || !lon1 || !lat2 || !lon2) return 0;
@@ -29,10 +40,41 @@ function calculateDistance(lat1, lon1, lat2, lon2) {
   return R * c; 
 }
 
+async function getAvailabilityStatus() {
+  try {
+    const avail = await Availability.findOne() || {};
+    const isEnabled = avail.isOrderingEnabled !== false;
+    const isTempClosed = avail.isTemporarilyClosed === true;
+    const start = avail.kitchenStartTime || "10:00";
+    const end = avail.kitchenEndTime || "22:00";
+    const reason = avail.reason || "Restaurant is closed right now.";
+
+    const pureVegMsg = "🌱 100% Pure Veg Kitchen";
+    const timeMsg = `🕒 Timings: ${start} to ${end}\n${pureVegMsg}`;
+
+    if (!isEnabled || isTempClosed) {
+        return { isOpen: false, message: `⚠️ *Currently Closed*\n${reason}\n\n${timeMsg}` };
+    }
+
+    const now = new Date();
+    const formatter = new Intl.DateTimeFormat('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', hour12: false });
+    const currentTimeStr = formatter.format(now);
+
+    if (currentTimeStr < start || currentTimeStr > end) {
+        return { isOpen: false, message: `⚠️ *Kitchen is Closed*\n\n${timeMsg}` };
+    }
+
+    return { isOpen: true, message: `🟢 *Kitchen is Open*\n${timeMsg}` };
+  } catch (e) {
+    return { isOpen: true, message: "🌱 100% Pure Veg Kitchen" };
+  }
+}
+
 async function verifyDeliveryLocation(area, landmark) {
   try {
     const GOOGLE_API_KEY = process.env.GOOGLE_MAPS_API_KEY;
-    const MAX_DISTANCE_KM = parseFloat(process.env.MAX_DISTANCE_KM) || 6;
+    const setting = await Setting.findOne() || {};
+    const MAX_DISTANCE_KM = setting.maxDeliveryDistance || 6;
     const HOTEL_LAT = process.env.HOTEL_LAT || 22.061401;
     const HOTEL_LNG = process.env.HOTEL_LNG || 78.94776;
 
@@ -68,7 +110,8 @@ async function verifyDeliveryLocation(area, landmark) {
 async function verifyLocationByCoords(lat, lng) {
   try {
     const GOOGLE_API_KEY = process.env.GOOGLE_MAPS_API_KEY;
-    const MAX_DISTANCE_KM = parseFloat(process.env.MAX_DISTANCE_KM) || 6;
+    const setting = await Setting.findOne() || {};
+    const MAX_DISTANCE_KM = setting.maxDeliveryDistance || 6;
     const HOTEL_LAT = process.env.HOTEL_LAT || 22.061401;
     const HOTEL_LNG = process.env.HOTEL_LNG || 78.94776;
 
@@ -112,23 +155,18 @@ async function getActiveOrder(userId) { return await Order.findOne({ user: userI
 
 async function getActiveOrdersToday(userId) {
   try {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
+    const { start, now } = getISTBounds();
     const orders = await Order.find({ 
         user: userId, 
-        createdAt: { $gte: today },
+        createdAt: { $gte: start },
         status: { $nin: ["delivered", "cancelled", "rejected"] } 
-    })
-    .populate("rider", "name phone vehicleNumber") 
-    .sort({ createdAt: -1 }).lean();
+    }).populate("rider", "name phone vehicleNumber").sort({ createdAt: -1 }).lean();
 
     const validOrders = [];
-    const now = new Date();
 
     for (let order of orders) {
         if (order.status === "pending" || order.paymentStatus === "pending") {
             const diffMins = (now - new Date(order.createdAt)) / (1000 * 60);
-            
             if (diffMins > 5) {
                 await Order.findByIdAndUpdate(order._id, { status: "rejected", paymentStatus: "failed" });
                 continue; 
@@ -166,15 +204,6 @@ async function getPaymentLinkByOrderId(orderId) {
     }
     return null;
   } catch (error) { return null; }
-}
-
-async function getCategories() { 
-  const cats = await Category.find({ isActive: true }).lean(); 
-  const comboCount = await Combo.countDocuments({});
-  if (comboCount > 0) {
-    cats.unshift({ _id: "combos_virtual", name: "Special Combos" });
-  }
-  return cats;
 }
 
 async function getTodayRosterItems() { 
@@ -275,6 +304,19 @@ async function getTodayRosterItems() {
   return items;
 }
 
+async function getCategories() { 
+  const rosterItems = await getTodayRosterItems();
+  const cats = await Category.find({ isActive: true }).lean(); 
+  
+  if (rosterItems.length > 0) {
+      const comboCount = await Combo.countDocuments({ isActive: true });
+      if (comboCount > 0) {
+        cats.unshift({ _id: "combos_virtual", name: "Special Combos" });
+      }
+  }
+  return cats;
+}
+
 async function searchTodayRosterItems(searchTerm) {
   if (!searchTerm) return [];
   const term = searchTerm.toLowerCase().trim();
@@ -340,9 +382,39 @@ async function saveNewAddress(userId, addressData, lat, lng) {
   } catch (error) { throw error; }
 }
 
+async function validateCartData(phone) {
+  const session = await getOrCreateSession(phone);
+  if (!session.cart || session.cart.length === 0) return { valid: true, removedItems: [] };
+  
+  const todayItems = await getTodayRosterItems();
+  let updatedCart = [];
+  let removedItems = [];
+  
+  for (let cItem of session.cart) {
+    const tItem = todayItems.find(i => String(i._id) === String(cItem.menuItemId));
+    if (tItem && tItem.availableNow > 0) {
+       let finalQty = Math.min(cItem.quantity, tItem.availableNow);
+       if (finalQty < cItem.quantity) {
+           removedItems.push(`${cItem.name} (Qty reduced)`);
+       }
+       cItem.quantity = finalQty;
+       cItem.price = tItem.basePrice; 
+       cItem.total = cItem.price * finalQty;
+       updatedCart.push(cItem);
+    } else {
+       removedItems.push(cItem.name);
+    }
+  }
+  
+  session.cart = updatedCart;
+  session.markModified('cart');
+  await session.save();
+  
+  return { valid: removedItems.length === 0, removedItems };
+}
+
 async function addItemsToCart(phone, items) { 
   const session = await getOrCreateSession(phone); const rosterItems = await getTodayRosterItems(); let feedbackMessages = []; 
-  const setting = await Setting.findOne() || { baseFee: 30, freeDeliveryAbove: 500 }; 
 
   for (const it of items) {
     const name = String(it.name || "").toLowerCase(); const qtyRequested = Math.max(1, parseInt(it.quantity || it.qty || 1));
@@ -367,7 +439,7 @@ async function addItemsToCart(phone, items) {
     if (newTotalQty > itemToAdd.maxAllowed) {
        const allowedToAdd = itemToAdd.maxAllowed - currentCartQty;
        if (allowedToAdd > 0) {
-           feedbackMessages.push(`⚠️ *${itemToAdd.name}* ke liye aap max *${itemToAdd.maxAllowed}* order kar sakte hain.`);
+           feedbackMessages.push(`⚠️ *${itemToAdd.name}* ki qty limit cross ho gayi thi. Humein bachi hui qty add kar di hai.`);
            if (existing) { existing.quantity += allowedToAdd; existing.total = existing.quantity * existing.price; } 
            else { session.cart.push({ menuItemId: itemToAdd._id, isCombo: itemToAdd.isCombo, name: finalName, price: itemToAdd.basePrice, quantity: allowedToAdd, total: itemToAdd.basePrice * allowedToAdd }); }
        } else { feedbackMessages.push(`⚠️ Aap already *${itemToAdd.name}* ki maximum limit cart mein add chuke hain.`); }
@@ -379,13 +451,12 @@ async function addItemsToCart(phone, items) {
   }
   session.markModified('cart'); 
   await session.save(); 
-  return { cart: session.cart, messages: feedbackMessages, setting }; 
+  return { messages: feedbackMessages, cart: session.cart }; 
 }
 
 async function removeItemsFromCart(phone, items) { 
   const session = await getOrCreateSession(phone); 
-  const setting = await Setting.findOne() || { baseFee: 30, freeDeliveryAbove: 500 }; 
-  if (!session.cart || session.cart.length === 0) return { cart: session.cart, setting }; 
+  if (!session.cart || session.cart.length === 0) return { cart: [] }; 
 
   for (const it of items) {
     const name = String(it.name || "").toLowerCase().trim(); const qtyToRemove = Math.max(1, parseInt(it.quantity || it.qty || 1));
@@ -399,53 +470,60 @@ async function removeItemsFromCart(phone, items) {
   }
   session.markModified('cart'); 
   await session.save(); 
-  return { cart: session.cart, setting };
+  return { cart: session.cart };
 }
 
-async function placeOrder(phone, paymentMethod) {
-  let user = await checkUserExists(phone); if (!user) user = await registerNewUser(phone, "Guest"); 
-  const session = await getOrCreateSession(phone); let selectedAddress = null;
-  if (session.addressId) { selectedAddress = await Address.findById(session.addressId); }
-  const subtotal = session.cart.reduce((sum, item) => sum + item.total, 0);
+async function getCartSummaryText(phone, couponCode = null) {
+  const session = await getOrCreateSession(phone);
+  const cart = session.cart || [];
+  if (cart.length === 0) return { isEmpty: true };
+
+  const setting = await Setting.findOne() || {};
+  const dCharge = setting.deliveryCharge || { freeDeliveryAbove: 500, isFreeDelivery: false, baseFee: 30 };
+  const gstSet = setting.gst || { foodGSTPercent: 5, deliveryGSTPercent: 5 };
+
+  let cartSummary = cart.map(item => `▪️ ${item.quantity}x ${item.name} - ₹${item.total}`).join("\n");
+  let subtotal = cart.reduce((sum, item) => sum + item.total, 0);
   
-  const setting = await Setting.findOne() || { baseFee: 30, freeDeliveryAbove: 500 }; 
-  const deliveryCharge = subtotal >= setting.freeDeliveryAbove ? 0 : setting.baseFee;
-  const total = subtotal + deliveryCharge; 
+  let discountMsg = "";
+  let discountAmt = 0;
+  let isFreeDelCoupon = false;
+
+  if (couponCode) {
+     const coupon = await Coupon.findOne({ code: couponCode.toUpperCase(), isActive: true, isDeleted: false });
+     if (coupon) {
+         const now = new Date();
+         if (now >= coupon.validFrom && now <= coupon.validTill && subtotal >= coupon.minOrderValue) {
+             if (coupon.discountType === "percentage") {
+                 discountAmt = (subtotal * coupon.discountValue) / 100;
+                 if (coupon.maxDiscountCap) discountAmt = Math.min(discountAmt, coupon.maxDiscountCap);
+             } else if (coupon.discountType === "flat") {
+                 discountAmt = coupon.discountValue;
+             } else if (coupon.discountType === "free_delivery") {
+                 isFreeDelCoupon = true;
+             }
+             discountAmt = Math.round(Math.min(discountAmt, subtotal));
+             if (discountAmt > 0) discountMsg = `🎫 Coupon (${coupon.code}): -₹${discountAmt}\n`;
+             if (isFreeDelCoupon) discountMsg += `🎫 Coupon (${coupon.code}): Free Delivery Applied!\n`;
+         }
+     }
+  }
+
+  const discountedSubtotal = subtotal - discountAmt;
+  const isFree = isFreeDelCoupon || dCharge.isFreeDelivery || discountedSubtotal >= (dCharge.freeDeliveryAbove || 500);
   
-  const phoneLast4 = phone ? String(phone).slice(-4) : "0000";
-  const orderCount = await Order.countDocuments({ user: user._id });
-  const sequence = String(orderCount + 1).padStart(4, '0');
-  const orderNumber = `ORD-WH-${phoneLast4}-${sequence}`;
-  
-  const newOrder = await Order.create({
-    orderNumber: orderNumber, user: user._id, items: session.cart, 
-    pricing: { subtotal, deliveryCharge, tax: 0, total }, 
-    address: { fullName: user.fullName || "WhatsApp User", phone: phone, street: selectedAddress ? selectedAddress.street : "Store Pickup", landmark: selectedAddress ? selectedAddress.landmark : "", city: "Madhya Pradesh" },
-    payment: { method: paymentMethod, status: paymentMethod === "ONLINE" ? "paid" : "pending" }, status: "pending",
-  });
-  session.step = "HOME"; session.cart = []; session.addressId = null; await session.save();
-  return newOrder;
+  let deliveryMsg = isFree ? "FREE! 🎉" : `₹${dCharge.baseFee} (Est.)`;
+  let foodGST = Math.round((discountedSubtotal * (gstSet.foodGSTPercent || 0)) / 100);
+  let estTotal = discountedSubtotal + foodGST + (isFree ? 0 : dCharge.baseFee);
+
+  let text = `🛒 *Aapka Cart:*\n${cartSummary}\n\n🧾 Subtotal: ₹${subtotal}\n`;
+  if (discountMsg) text += discountMsg;
+  text += `🍲 Food GST: ₹${foodGST}\n🚚 Est. Delivery: ${deliveryMsg}\n💰 Est. Total: ₹${estTotal}\n\nAur kuch chahiye ya checkout karein?`;
+
+  return { isEmpty: false, text, hasCoupon: !!discountMsg };
 }
 
-async function cancelOrder(userId) { 
-  const activeOrder = await getActiveOrder(userId);
-  if (activeOrder && ["pending", "preparing", "accepted"].includes(activeOrder.status)) { return await Order.findByIdAndUpdate(activeOrder._id, { status: "cancelled" }, { new: true }); }
-  return null; 
-}
-
-async function getUserOrderStats(userId) { 
-  try {
-    const orders = await Order.find({ user: userId }); let totalOrders = orders.length; let deliveredOrders = 0; let cancelledOrders = 0; let totalSpent = 0;
-    orders.forEach(order => {
-        const status = order.status ? order.status.toLowerCase() : "";
-        if (status === "delivered") deliveredOrders++; if (status === "cancelled") cancelledOrders++;
-        if (["confirmed", "preparing", "dispatched", "out_for_delivery", "delivered"].includes(status)) { totalSpent += (order.totalAmount || order.pricing?.total || 0); }
-    });
-    return { totalOrders, deliveredOrders, cancelledOrders, totalSpent };
-  } catch (error) { return { totalOrders: 0, deliveredOrders: 0, cancelledOrders: 0, totalSpent: 0 }; }
-}
-
-async function processBotOrderAndPayment(userId, phone, cartItems, addressId, distanceKm = null) { 
+async function processBotOrderAndPayment(userId, phone, cartItems, addressId, distanceKm = null, couponCode = null) { 
   try {
     const fullAddress = await Address.findById(addressId); if (!fullAddress) return { success: false };
     
@@ -457,20 +535,53 @@ async function processBotOrderAndPayment(userId, phone, cartItems, addressId, di
     }
     finalDistance = Math.round(finalDistance * 100) / 100;
 
-    const setting = await Setting.findOne() || { baseFee: 30, perKmRate: 10, baseDistanceKm: 5, minCharge: 20, maxCharge: 200, freeDeliveryAbove: 500 };
+    const setting = await Setting.findOne() || {};
+    const dCharge = setting.deliveryCharge || { freeDeliveryAbove: 500, isFreeDelivery: false, baseDistance: 5, baseFee: 30, extraPerKmRate: 10, minCharge: 20, maxCharge: 200 };
+    const gstSet = setting.gst || { foodGSTPercent: 5, deliveryGSTPercent: 5 };
+
     const subtotal = cartItems.reduce((sum, item) => sum + item.total, 0); 
     
+    let discountAmt = 0;
+    let isFreeDelCoupon = false;
+    let appliedCouponDoc = null;
+
+    if (couponCode) {
+       const coupon = await Coupon.findOne({ code: couponCode.toUpperCase(), isActive: true, isDeleted: false });
+       if (coupon) {
+           const now = new Date();
+           if (now >= coupon.validFrom && now <= coupon.validTill && subtotal >= coupon.minOrderValue) {
+               if (coupon.discountType === "percentage") {
+                   discountAmt = (subtotal * coupon.discountValue) / 100;
+                   if (coupon.maxDiscountCap) discountAmt = Math.min(discountAmt, coupon.maxDiscountCap);
+               } else if (coupon.discountType === "flat") {
+                   discountAmt = coupon.discountValue;
+               } else if (coupon.discountType === "free_delivery") {
+                   isFreeDelCoupon = true;
+               }
+               discountAmt = Math.round(Math.min(discountAmt, subtotal));
+               appliedCouponDoc = coupon;
+           }
+       }
+    }
+
+    const discountedSubtotal = subtotal - discountAmt;
+
     let deliveryCharge = 0;
-    if (subtotal < setting.freeDeliveryAbove) {
-      deliveryCharge = setting.baseFee;
-      if (finalDistance > setting.baseDistanceKm) {
-        deliveryCharge += (finalDistance - setting.baseDistanceKm) * setting.perKmRate;
+    if (!isFreeDelCoupon && !dCharge.isFreeDelivery && discountedSubtotal < (dCharge.freeDeliveryAbove || 500)) {
+      deliveryCharge = dCharge.baseFee || 30;
+      if (finalDistance > (dCharge.baseDistance || 5)) {
+        deliveryCharge += (finalDistance - (dCharge.baseDistance || 5)) * (dCharge.extraPerKmRate || 10);
       }
-      if (deliveryCharge < setting.minCharge) deliveryCharge = setting.minCharge;
-      if (deliveryCharge > setting.maxCharge) deliveryCharge = setting.maxCharge;
+      if (deliveryCharge < (dCharge.minCharge || 20)) deliveryCharge = dCharge.minCharge || 20;
+      if (deliveryCharge > (dCharge.maxCharge || 200)) deliveryCharge = dCharge.maxCharge || 200;
     }
     deliveryCharge = Math.round(deliveryCharge);
-    const totalAmount = subtotal + deliveryCharge;
+    
+    const foodGST = Math.round((discountedSubtotal * (gstSet.foodGSTPercent || 0)) / 100);
+    const deliveryGST = Math.round((deliveryCharge * (gstSet.deliveryGSTPercent || 0)) / 100);
+    const totalTax = foodGST + deliveryGST;
+
+    const totalAmount = discountedSubtotal + deliveryCharge + totalTax;
 
     const phoneLast4 = phone ? String(phone).slice(-4) : "0000";
     const orderCount = await Order.countDocuments({ user: userId });
@@ -481,18 +592,23 @@ async function processBotOrderAndPayment(userId, phone, cartItems, addressId, di
       orderNumber: uniqueOrderNumber, orderSource: "whatsapp", user: userId,
       items: cartItems.map(item => ({ menuItem: item.isCombo ? null : item.menuItemId, combo: item.isCombo ? item.menuItemId : null, name: item.name, price: item.price || (item.total / item.quantity), quantity: item.quantity, total: item.total })),
       address: { street: fullAddress.street || "Unknown", landmark: fullAddress.landmark || "", label: fullAddress.label || "Home", lat: fullAddress.lat || 0, lng: fullAddress.lng || 0 },
-      pricing: { subtotal: subtotal, deliveryCharge: deliveryCharge, tax: 0, total: totalAmount }, 
+      pricing: { subtotal: subtotal, deliveryCharge: deliveryCharge, tax: totalTax, total: totalAmount }, 
       totalAmount: totalAmount, noContact: false, paymentStatus: "pending", orderStatus: "pending",
       distanceKm: finalDistance, distance: finalDistance
     });
     
     const savedOrder = await newOrder.save();
+
+    if (appliedCouponDoc) {
+       await CouponUsage.create({ coupon: appliedCouponDoc._id, user: userId, orderId: savedOrder._id, discountApplied: discountAmt });
+       await Coupon.findByIdAndUpdate(appliedCouponDoc._id, { $inc: { usedCount: 1 } });
+    }
     
     const paymentLinkReq = { amount: Math.round(totalAmount * 100), currency: "INR", accept_partial: false, description: "Hotel The Galaxy Order", customer: { contact: phone }, notify: { sms: false, email: false }, reminder_enable: true, reference_id: savedOrder._id.toString(), notes: { dbOrderId: savedOrder._id.toString(), phone: phone } };
     const paymentLink = await razorpay.paymentLink.create(paymentLinkReq);
     await Payment.create({ order: savedOrder._id, amount: totalAmount, gateway: "RAZORPAY", status: "created", metadata: { razorpayOrderId: paymentLink.id, userId: userId, paymentUrl: paymentLink.short_url } });
     
-    return { success: true, orderId: savedOrder._id, paymentUrl: paymentLink.short_url, totalAmount, subtotal, deliveryCharge };
+    return { success: true, orderId: savedOrder._id, paymentUrl: paymentLink.short_url, totalAmount, subtotal, deliveryCharge, tax: totalTax, foodGST, deliveryGST, isFreeDelivery: deliveryCharge === 0, discountAmt };
   } catch (error) { return { success: false }; }
 }
 
@@ -523,26 +639,77 @@ async function checkLatestPaymentStatus(userId) {
 
 async function getActiveOffers() {
   try {
-    const now = new Date();
-    const startOfToday = new Date(now);
-    startOfToday.setUTCHours(0, 0, 0, 0);
-
+    const { start, now } = getISTBounds();
     const offers = await Offer.find({ 
         isActive: true,
         startDate: { $lte: now },
-        endDate: { $gte: startOfToday } 
+        endDate: { $gte: start } 
     }).populate("items", "name basePrice").populate("combos", "name price").lean(); 
     
-    const combos = await Combo.find({}).populate("items.item", "name").lean();
+    const combos = await Combo.find({ isActive: true }).populate("items.item", "name").lean();
 
     return { offers, combos };
   } catch (error) { return { offers: [], combos: [] }; }
 }
 
+async function validateCoupon(phone, code) {
+  const session = await getOrCreateSession(phone);
+  const cart = session.cart || [];
+  if (cart.length === 0) return { valid: false, message: "Cart khali hai." };
+  
+  const subtotal = cart.reduce((sum, item) => sum + item.total, 0);
+  const coupon = await Coupon.findOne({ code: code.toUpperCase(), isActive: true, isDeleted: false });
+  
+  if (!coupon) return { valid: false, message: "❌ Invalid Coupon Code." };
+  
+  const now = new Date();
+  if (now < coupon.validFrom || now > coupon.validTill) return { valid: false, message: "❌ Yeh coupon expire ho chuka hai ya abhi active nahi hai." };
+  if (subtotal < coupon.minOrderValue) return { valid: false, message: `❌ Is coupon ke liye minimum order ₹${coupon.minOrderValue} hona chahiye.` };
+  if (coupon.usageLimit !== null && coupon.usedCount >= coupon.usageLimit) return { valid: false, message: "❌ Yeh coupon apni usage limit cross kar chuka hai." };
+  
+  const user = await checkUserExists(phone);
+  if (user) {
+      const userUsage = await CouponUsage.countDocuments({ coupon: coupon._id, user: user._id });
+      if (userUsage >= coupon.perUserLimit) return { valid: false, message: "❌ Aap is coupon ko pehle hi max limit tak use kar chuke hain." };
+  }
+
+  return { valid: true, message: `🎉 Coupon *${coupon.code}* successfully apply ho gaya!` };
+}
+
+async function placeOrder(phone, paymentMethod) { return null; }
+async function cancelOrder(userId) { 
+  const activeOrder = await getActiveOrder(userId);
+  if (activeOrder && ["pending", "preparing", "accepted"].includes(activeOrder.status)) { return await Order.findByIdAndUpdate(activeOrder._id, { status: "cancelled" }, { new: true }); }
+  return null; 
+}
+
+// 🔥 FIX: EXPORT YAHAN THEEK KIYA GAYA HAI
+async function getUserOrderStats(userId) { 
+  try {
+    const orders = await Order.find({ user: userId }); 
+    let totalOrders = orders.length; 
+    let deliveredOrders = 0; 
+    let cancelledOrders = 0; 
+    let totalSpent = 0;
+    orders.forEach(order => {
+        const status = order.status ? order.status.toLowerCase() : "";
+        if (status === "delivered") deliveredOrders++; 
+        if (status === "cancelled") cancelledOrders++;
+        if (["confirmed", "preparing", "dispatched", "out_for_delivery", "delivered"].includes(status)) { 
+            totalSpent += (order.totalAmount || order.pricing?.total || 0); 
+        }
+    });
+    return { totalOrders, deliveredOrders, cancelledOrders, totalSpent };
+  } catch (error) { 
+      return { totalOrders: 0, deliveredOrders: 0, cancelledOrders: 0, totalSpent: 0 }; 
+  }
+}
+
 module.exports = {
-  checkUserExists, registerNewUser, getOrCreateSession, getActiveOrder, getActiveOrdersToday, getPendingOrders, getPaymentLinkByOrderId, getActiveOffers,
+  checkUserExists, registerNewUser, getOrCreateSession, getActiveOrder, getActiveOrdersToday, getPendingOrders, getPaymentLinkByOrderId, getActiveOffers, getAvailabilityStatus,
   getCategories, getMenuByCategory, getUserAddresses, getUserOrderStats, getTodayRosterItems, 
   searchTodayRosterItems, getAvailableCategoriesToday, saveNewAddress, addItemsToCart, 
   placeOrder, cancelOrder, removeItemsFromCart, processBotOrderAndPayment, 
-  checkLatestPaymentStatus, verifyDeliveryLocation, verifyLocationByCoords
+  checkLatestPaymentStatus, verifyDeliveryLocation, verifyLocationByCoords,
+  validateCartData, getCartSummaryText, validateCoupon 
 };
