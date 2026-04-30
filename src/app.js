@@ -58,6 +58,8 @@ const allowedOrigins = [
   process.env.CLIENT_URL,
   "https://uat.hotelthegalaxy.in",
   "https://www.uat.hotelthegalaxy.in",
+  "https://hotelthegalaxy.in",
+  "https://www.hotelthegalaxy.in",
   "https://admin.hotelthegalaxy.in",
   "https://www.admin.hotelthegalaxy.in",
   "http://192.168.0.126:3000",
