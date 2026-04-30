@@ -1,8 +1,8 @@
 const Offer = require("../models/Offer");
 const MenuItem = require("../models/dining/menuItemmodel");
 const Combo = require("../models/dining/combomodel");
-const User = require("../models/User"); // 🔥 NEW: User model import kiya for fetching phone numbers
-const { sendOfferTemplate } = require("../utils/whatsaap/sendOfferTemplate");
+const User = require("../models/User"); 
+const { sendWhatsAppMessage } = require("../utils/whatsaap/sendTemplate");
 
 const uploadToCloudinary = require("../utils/cloudUpload");
 const cloudinary = require("../config/cloudinary");
@@ -10,93 +10,132 @@ const cloudinary = require("../config/cloudinary");
 const { getFinalPrice } = require("../services/priceService");
 
 // 🔥 NEW: Background function to broadcast WhatsApp messages
-const sendOfferToAllUsers = async (offerData) => {
+const sendOfferToAllUsers = async (offer) => {
   try {
-    // 1. Get all active users with phone numbers
-    const users = await User.find({ phone: { $exists: true, $ne: null } }).select("phone fullName");
-    
-    // 2. Format discount text
-    const discountText = offerData.discountType === "percentage" 
-      ? `${offerData.discountValue}% OFF` 
-      : `Flat ₹${offerData.discountValue} OFF`;
+    const users = await User.find({ phone: { $exists: true, $ne: null, $ne: "" } });
 
-    // 3. Format dates to Indian standard readable format
-    const startDate = new Date(offerData.startDate).toLocaleDateString("en-IN");
-    const endDate = new Date(offerData.endDate).toLocaleDateString("en-IN");
-
-    // 4. Send messages to all users
-    for (const user of users) {
-      let formattedPhone = user.phone.toString().replace(/\D/g, '');
-      if (formattedPhone.length === 10) formattedPhone = "91" + formattedPhone;
-
-      // Call the template function
-      await sendOfferTemplate(formattedPhone, {
-        imageUrl: offerData.image.url,
-        userName: user.fullName || "Guest",
-        offerName: offerData.name,
-        discountText: discountText,
-        startDate: startDate,
-        endDate: endDate
-      });
+    if (!users || users.length === 0) {
+      console.log("⚠️ No users found to send WhatsApp broadcast.");
+      return;
     }
+
+    console.log(`🚀 Starting WhatsApp broadcast for ${users.length} users...`);
+
+    const offerName = offer.name; 
+    
+    // 🛠️ THE FIX: Added .toLowerCase() to handle "PERCENTAGE", "Percentage", or "percentage"
+    const discountText = offer.discountType?.toLowerCase() === "percentage" 
+      ? `${offer.discountValue}% OFF` 
+      : `₹${offer.discountValue} OFF`; 
+      
+    const endDateString = new Date(offer.endDate).toLocaleDateString("en-IN"); 
+
+    // Fetching actual names for {{5}} (Applicable Items)
+    let itemNames = [];
+    let comboNames = [];
+
+    // Query MenuItem collection for selected item IDs
+    if (offer.items && offer.items.length > 0) {
+      const itemsData = await MenuItem.find({ _id: { $in: offer.items } }).select("name");
+      itemNames = itemsData.map(item => item.name);
+    }
+
+    // Query Combo collection for selected combo IDs
+    if (offer.combos && offer.combos.length > 0) {
+      const combosData = await Combo.find({ _id: { $in: offer.combos } }).select("name");
+      comboNames = combosData.map(combo => combo.name);
+    }
+
+    // Combine all names into one array
+    const allSelectedNames = [...itemNames, ...comboNames];
+
+    let applicableOn = "Selected Items"; 
+    
+    if (allSelectedNames.length > 0) {
+      // Join them with a comma and space (e.g., "Burger, Pizza, Coke")
+      applicableOn = allSelectedNames.join(", ");
+      
+      // WhatsApp safeguard: If the list of items is extremely long, truncate it so the API doesn't throw a length error
+      if (applicableOn.length > 250) {
+        applicableOn = applicableOn.substring(0, 247) + "...";
+      }
+    }
+
+    let headerImageUrl = offer.image?.url;
+
+    // Force the Cloudinary URL to be a .jpg to prevent WhatsApp "UNKNOWN" format errors
+    if (headerImageUrl) {
+      const lastSlashIndex = headerImageUrl.lastIndexOf('/');
+      const lastDotIndex = headerImageUrl.lastIndexOf('.');
+
+      if (lastDotIndex > lastSlashIndex) {
+        headerImageUrl = headerImageUrl.substring(0, lastDotIndex) + ".jpg";
+      } else {
+        headerImageUrl += ".jpg";
+      }
+    }
+
+    for (const user of users) {
+      try {
+        const userName = user.fullName || "Foodie"; 
+
+        const parameters = [
+          offerName,      // {{1}}
+          userName,       // {{2}}
+          discountText,   // {{3}}
+          endDateString,  // {{4}}
+          applicableOn    // {{5}}
+        ];
+
+        await sendWhatsAppMessage({
+          to: user.phone, 
+          type: "template",
+          templateName: "new_offer_alert",
+          parameters: parameters,
+          headerImageUrl: headerImageUrl 
+        });
+
+      } catch (err) {
+        console.error(`❌ Failed for number ${user.phone}:`, err.message);
+      }
+    }
+
+    console.log("🎉 WhatsApp broadcast completed successfully!");
+
   } catch (error) {
-    console.error("Error in background WhatsApp broadcast:", error);
+    console.error("❌ Fatal Error in sendOfferToAllUsers background job:", error);
   }
 };
+
 
 const getMenuItems = async (req, res) => {
   try {
     const items = await MenuItem.find().lean();
-
     const result = [];
-
     for (const item of items) {
       const priceData = await getFinalPrice(item, "item");
-
-      result.push({
-        ...item,
-        ...priceData,
-      });
+      result.push({ ...item, ...priceData });
     }
-
-    res.json({
-      success: true,
-      data: result,
-    });
+    res.json({ success: true, data: result });
   } catch (error) {
-    res.status(500).json({
-      success: false,
-      message: error.message,
-    });
+    res.status(500).json({ success: false, message: error.message });
   }
 };
 
 const getCombos = async (req, res) => {
   try {
     const combos = await Combo.find().lean();
-
     const result = [];
-
     for (const combo of combos) {
       const priceData = await getFinalPrice(combo, "combo");
-
-      result.push({
-        ...combo,
-        ...priceData,
-      });
+      result.push({ ...combo, ...priceData });
     }
-
-    res.json({
-      success: true,
-      data: result,
-    });
+    res.json({ success: true, data: result });
   } catch (error) {
-    res.status(500).json({
-      success: false,
-      message: error.message,
-    });
+    res.status(500).json({ success: false, message: error.message });
   }
 };
+
 
 const createOffer = async (req, res) => {
   try {
@@ -110,7 +149,6 @@ const createOffer = async (req, res) => {
 
     if (req.file) {
       const uploaded = await uploadToCloudinary(req.file.buffer, "offers");
-
       imageData = {
         url: uploaded.secure_url,
         public_id: uploaded.public_id,
@@ -128,10 +166,8 @@ const createOffer = async (req, res) => {
       image: imageData,
     });
 
-    // 🔥 NEW: Trigger WhatsApp message broadcast in background
-    // Sirf tab bhejein jab image upload hui ho, kyunki template mein header image mandatory hai
     if (imageData.url) {
-        sendOfferToAllUsers(offer); // Note: Await nahi lagaya taaki API response slow na ho
+        sendOfferToAllUsers(offer); 
     }
 
     res.status(201).json({

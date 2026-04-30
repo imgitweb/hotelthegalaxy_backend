@@ -1,6 +1,92 @@
 const Combo = require("../../models/dining/combomodel");
+const User = require("../../models/User"); // 🔥 NEW: Imported for WhatsApp users
+const MenuItem = require("../../models/dining/menuItemmodel"); // 🔥 NEW: Imported for item names
 const uploadToCloudinary = require("../../utils/cloudUpload");
+const { sendWhatsAppMessage } = require("../../utils/whatsaap/sendTemplate");
 
+// ==========================================
+// 🔥 BACKGROUND JOB FOR COMBO BROADCAST
+// ==========================================
+const sendComboToAllUsers = async (combo) => {
+  try {
+    const users = await User.find({ phone: { $exists: true, $ne: null, $ne: "" } });
+
+    if (!users || users.length === 0) {
+      console.log("⚠️ No users found to send Combo WhatsApp broadcast.");
+      return;
+    }
+
+    console.log(`🚀 Starting Combo WhatsApp broadcast for ${users.length} users...`);
+
+    const comboName = combo.name; // {{1}}
+    const comboPrice = combo.price; // {{3}}
+
+    // 🛠️ Fetching item names for {{4}} (What's inside)
+    let itemNames = [];
+    if (combo.items && combo.items.length > 0) {
+      const itemsData = await MenuItem.find({ _id: { $in: combo.items } }).select("name");
+      itemNames = itemsData.map(item => item.name);
+    }
+
+    let itemsIncluded = "Chef's special delicious items"; 
+    if (itemNames.length > 0) {
+      itemsIncluded = itemNames.join(", ");
+      if (itemsIncluded.length > 250) {
+        itemsIncluded = itemsIncluded.substring(0, 247) + "..."; // Character limit safeguard
+      }
+    }
+
+    // 🛠️ Taking the FIRST image from the combo images array for WhatsApp Header
+    let headerImageUrl = combo.images && combo.images.length > 0 ? combo.images[0].url : null;
+
+    // Force Cloudinary URL to be .jpg to prevent WhatsApp "UNKNOWN" error
+    if (headerImageUrl) {
+      const lastSlashIndex = headerImageUrl.lastIndexOf('/');
+      const lastDotIndex = headerImageUrl.lastIndexOf('.');
+
+      if (lastDotIndex > lastSlashIndex) {
+        headerImageUrl = headerImageUrl.substring(0, lastDotIndex) + ".jpg";
+      } else {
+        headerImageUrl += ".jpg";
+      }
+    }
+
+    // Broadcast Loop
+    for (const user of users) {
+      try {
+        const userName = user.fullName || user.name || "Foodie"; // {{2}}
+
+        const parameters = [
+          comboName,      // {{1}}
+          userName,       // {{2}}
+          `${comboPrice}`,// {{3}}
+          itemsIncluded   // {{4}}
+        ];
+
+        await sendWhatsAppMessage({
+          to: user.phone, 
+          type: "template",
+          templateName: "new_combo_alert", // Dhyan dein: Meta Manager me yahi exact naam hona chahiye
+          parameters: parameters,
+          headerImageUrl: headerImageUrl 
+        });
+
+      } catch (err) {
+        console.error(`❌ Failed for number ${user.phone}:`, err.message);
+      }
+    }
+
+    console.log("🎉 Combo WhatsApp broadcast completed successfully!");
+
+  } catch (error) {
+    console.error("❌ Fatal Error in sendComboToAllUsers background job:", error);
+  }
+};
+
+
+// ==========================================
+// 🍔 COMBO CONTROLLER
+// ==========================================
 const createCombo = async (req, res) => {
   try {
     let { name, price, items, description } = req.body;
@@ -51,6 +137,12 @@ const createCombo = async (req, res) => {
       images: imageUrls,
     });
 
+    // 🔥 Trigger WhatsApp Broadcast Background Job
+    // Broadcast tabhi chalega agar kam se kam 1 image upload hui ho (header parameter ke liye mandatory hai)
+    if (imageUrls.length > 0) {
+      sendComboToAllUsers(combo);
+    }
+
     res.status(201).json({
       success: true,
       message: "Combo created successfully",
@@ -63,6 +155,8 @@ const createCombo = async (req, res) => {
     });
   }
 };
+
+
 
 const getCombos = async (req, res) => {
   try {

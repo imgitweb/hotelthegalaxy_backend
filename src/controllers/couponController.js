@@ -1,35 +1,204 @@
 const Coupon = require("../models/couponModel.js");
 const CouponUsage = require("../models/couponUsageModel.js");
+const User = require("../models/User.js"); // 🔥 Imported User Model
+const crypto = require("crypto"); // Unique string generate karne ke liye
+const { sendWhatsAppMessage } = require("../utils/whatsaap/sendTemplate.js");
 
+// ==========================================
+// 🔥 HELPER FUNCTIONS FOR TEMPLATE FORMATTING
+// ==========================================
+const getDiscountText = (type, value) => {
+  if (type === "flat") return `₹${value}`;
+  if (type === "percentage") return `${value}%`;
+  return "Free Delivery";
+};
+
+const getMinOrderText = (value) => {
+  return value && value > 0 ? `₹${value}` : "No Minimum";
+};
+
+// ==========================================
+// 🔥 BACKGROUND JOBS FOR WHATSAPP
+// ==========================================
+
+// 1. Single Coupon Broadcast (Jab isBulk: false ho)
+const sendSingleCouponToAllUsers = async (coupon) => {
+  try {
+    const users = await User.find({ phone: { $exists: true, $ne: null, $ne: "" } });
+
+    if (!users || users.length === 0) return;
+    console.log(`🚀 Sending General Coupon to ${users.length} users...`);
+
+    const discountText = getDiscountText(coupon.discountType, coupon.discountValue); // {{2}}
+    const minOrderText = getMinOrderText(coupon.minOrderValue); // {{3}}
+    const validTillString = new Date(coupon.validTill).toLocaleDateString("en-IN"); // {{4}}
+
+    for (const user of users) {
+      try {
+        await sendWhatsAppMessage({
+          to: user.phone,
+          type: "template",
+          templateName: "coupon_created_offer",
+          parameters: [
+            coupon.code,       // {{1}} Coupon Code
+            discountText,      // {{2}} Discount Text
+            minOrderText,      // {{3}} Min Order
+            validTillString    // {{4}} Valid Till
+          ]
+        });
+      } catch (err) {
+        console.error(`❌ WA Failed for ${user.phone}:`, err.message);
+      }
+    }
+    console.log("🎉 General Coupon Broadcast Completed!");
+  } catch (error) {
+    console.error("❌ Error in sendSingleCouponToAllUsers:", error);
+  }
+};
+
+// 2. Bulk Unique Coupon Broadcast (Jab isBulk: true ho)
+// Yahan users array aur unke corresponding coupons array pass kiye jayenge
+const sendBulkCouponsToUsers = async (users, bulkCoupons) => {
+  try {
+    console.log(`🚀 Sending ${bulkCoupons.length} Unique Bulk Coupons to users...`);
+
+    for (let i = 0; i < users.length; i++) {
+      const user = users[i];
+      const assignedCoupon = bulkCoupons[i]; // Har user ka apna specific code
+
+      const discountText = getDiscountText(assignedCoupon.discountType, assignedCoupon.discountValue); // {{2}}
+      const minOrderText = getMinOrderText(assignedCoupon.minOrderValue); // {{3}}
+      const validTillString = new Date(assignedCoupon.validTill).toLocaleDateString("en-IN"); // {{4}}
+
+      try {
+        await sendWhatsAppMessage({
+          to: user.phone,
+          type: "template",
+          templateName: "coupon_created_offer",
+          parameters: [
+            assignedCoupon.code, // {{1}} User-specific Unique Code
+            discountText,        // {{2}} 
+            minOrderText,        // {{3}} 
+            validTillString      // {{4}} 
+          ]
+        });
+      } catch (err) {
+        console.error(`❌ WA Failed for ${user.phone} with code ${assignedCoupon.code}:`, err.message);
+      }
+    }
+    console.log("🎉 Bulk Coupon Broadcast Completed!");
+  } catch (error) {
+    console.error("❌ Error in sendBulkCouponsToUsers:", error);
+  }
+};
+
+// ==========================================
+// 🍔 CONTROLLER: CREATE COUPON
+// ==========================================
 exports.createCoupon = async (req, res) => {
   try {
     const {
       code, discountType, discountValue, maxDiscountCap, minOrderValue,
-      validFrom, validTill, usageLimit, perUserLimit, description, tag,
+      validFrom, validTill, usageLimit, perUserLimit, description, tag, isBulk
     } = req.body;
 
-    const codeRegex = /^[A-Z0-9]{4,20}$/;
-    if (!codeRegex.test(code?.toUpperCase())) {
-      return res.status(400).json({ success: false, message: "Coupon code must be 4–20 alphanumeric characters" });
+    // Dates validation
+    if (!validTill) {
+      return res.status(400).json({ success: false, message: "Valid Till date is required" });
     }
 
-    const existing = await Coupon.findOne({ code: code.toUpperCase(), isDeleted: false });
-    if (existing) {
-      return res.status(400).json({ success: false, message: "Coupon code already exists" });
+    // --------------------------------------------------------
+    // 🔥 SCENARIO 1: BULK COUPON CREATION (Unique for every user)
+    // --------------------------------------------------------
+    if (isBulk === true || isBulk === "true") {
+      const users = await User.find({ phone: { $exists: true, $ne: null, $ne: "" } });
+      
+      if (!users || users.length === 0) {
+        return res.status(400).json({ success: false, message: "No valid users found to send bulk coupons" });
+      }
+
+      const batchId = `BATCH_${Date.now()}`;
+      const bulkCoupons = [];
+      
+      // Agar code pass kiya hai toh usko PREFIX manenge (e.g. 'OFFER' -> 'OFFER1A2B')
+      // Agar nahi kiya toh default 'OFR' prefix lenge
+      const prefix = code ? code.toUpperCase().substring(0, 10) : "OFR"; 
+
+      for (let i = 0; i < users.length; i++) {
+        // Generate random 6 character hex string
+        const randomStr = crypto.randomBytes(3).toString("hex").toUpperCase();
+        const uniqueCode = `${prefix}${randomStr}`; // Example: DIWALI8F3A1B
+
+        bulkCoupons.push({
+          code: uniqueCode,
+          discountType,
+          discountValue: discountValue || 0,
+          maxDiscountCap: maxDiscountCap || null,
+          minOrderValue: minOrderValue || 0,
+          validFrom: validFrom || new Date(),
+          validTill,
+          usageLimit: 1, // Bulk mein har code generally sirf 1 baar use hota hai
+          perUserLimit: 1,
+          description,
+          tag,
+          isBulk: true,
+          batchId
+        });
+      }
+
+      // Save all unique coupons in DB at once (Fastest way)
+      await Coupon.insertMany(bulkCoupons);
+
+      // Trigger Background Job
+      sendBulkCouponsToUsers(users, bulkCoupons);
+
+      return res.status(201).json({ 
+        success: true, 
+        message: `${users.length} bulk unique coupons created and WhatsApp broadcast started!`,
+        batchId 
+      });
+
+    } 
+    // --------------------------------------------------------
+    // 🔥 SCENARIO 2: SINGLE COUPON CREATION (One code for all)
+    // --------------------------------------------------------
+    else {
+      const codeRegex = /^[A-Z0-9]{4,20}$/;
+      if (!codeRegex.test(code?.toUpperCase())) {
+        return res.status(400).json({ success: false, message: "Coupon code must be 4–20 alphanumeric characters" });
+      }
+
+      const existing = await Coupon.findOne({ code: code.toUpperCase(), isDeleted: false });
+      if (existing) {
+        return res.status(400).json({ success: false, message: "Coupon code already exists" });
+      }
+
+      const coupon = await Coupon.create({
+        code: code.toUpperCase(), 
+        discountType, 
+        discountValue: discountValue || 0,
+        maxDiscountCap: maxDiscountCap || null, 
+        minOrderValue: minOrderValue || 0,
+        validFrom: validFrom || new Date(), 
+        validTill, 
+        usageLimit: usageLimit || null,
+        perUserLimit: perUserLimit || 1, 
+        description, 
+        tag,
+        isBulk: false
+      });
+
+      // Trigger Background Job
+      sendSingleCouponToAllUsers(coupon);
+
+      return res.status(201).json({ success: true, coupon });
     }
 
-    const coupon = await Coupon.create({
-      code: code.toUpperCase(), discountType, discountValue: discountValue || 0,
-      maxDiscountCap: maxDiscountCap || null, minOrderValue: minOrderValue || 0,
-      validFrom: validFrom || new Date(), validTill, usageLimit: usageLimit || null,
-      perUserLimit: perUserLimit || 1, description, tag,
-    });
-
-    res.status(201).json({ success: true, coupon });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
 };
+
 
 exports.generateBulkCoupons = async (req, res) => {
   try {
@@ -147,6 +316,7 @@ exports.getAllCoupons = async (req, res) => {
     res.status(500).json({ success: false, message: err.message });
   }
 };
+
 
 // ─────────────────────────────────────────────
 // ADMIN: Update coupon
