@@ -26,7 +26,7 @@ router.post("/", adminAuth, createCoupon);
 router.get("/", adminAuth, getAllCoupons);
 router.patch("/:id", adminAuth, updateCoupon);
 router.patch("/:id/toggle", adminAuth, toggleCoupon);
-router.delete("/admin/coupons/:id", adminAuth, deleteCoupon);
+router.delete("/:id", adminAuth, deleteCoupon);
 router.get("/:id/report", adminAuth, getCouponUsageReport);
 
 // ... existing admin coupon routes
