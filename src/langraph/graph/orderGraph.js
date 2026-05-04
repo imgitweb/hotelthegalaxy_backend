@@ -756,7 +756,7 @@ async function actionExecutionNode(state) {
 
             if (orderStatus !== "pending" && order.paymentStatus !== "pending") {
                 if (["dispatched", "out_for_delivery"].includes(orderStatus) && order.rider) { 
-                  replyText += `🛵 Rider: ${order.rider.name || "Executive"} (📞 ${order.rider.phone})\n`; 
+                  replyText += `🛵 Rider: ${order.rider.name || "Executive"} (📞 +91${order.rider.phone})\n`; 
                   const trackingUrl = `https://uat.hotelthegalaxy.in/track-order/${order._id}`;
                   replyText += `📍 *Track Here:* ${trackingUrl}\n`;
                 } else { 
