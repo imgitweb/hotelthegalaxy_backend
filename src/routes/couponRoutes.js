@@ -9,7 +9,7 @@ const {
   getCouponUsageReport,
   getActiveCoupons,
   validateCoupon,
-  exportBulkCoupons,generateBulkCoupons
+  exportBulkCoupons,generateBulkCoupons ,deleteBulkBatch
 } = require("../controllers/couponController.js");
 
 // Middleware require setup
@@ -28,6 +28,8 @@ router.patch("/:id", adminAuth, updateCoupon);
 router.patch("/:id/toggle", adminAuth, toggleCoupon);
 router.delete("/:id", adminAuth, deleteCoupon);
 router.get("/:id/report", adminAuth, getCouponUsageReport);
+router.delete("/batch/:batchId", adminAuth, deleteBulkBatch);
+
 
 // ... existing admin coupon routes
 router.post("/bulk",adminAuth, generateBulkCoupons);

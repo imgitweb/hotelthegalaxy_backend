@@ -391,6 +391,38 @@ exports.deleteCoupon = async (req, res) => {
   }
 };
 
+
+
+// ─────────────────────────────────────────────
+// ADMIN: Delete entire batch of bulk coupons
+// ─────────────────────────────────────────────
+exports.deleteBulkBatch = async (req, res) => {
+  try {
+    const { batchId } = req.params;
+
+    if (!batchId) {
+      return res.status(400).json({ success: false, message: "batchId is required" });
+    }
+
+    const result = await Coupon.updateMany(
+      { batchId, isDeleted: false },
+      { isDeleted: true, isActive: false }
+    );
+
+    if (result.matchedCount === 0) {
+      return res.status(404).json({ success: false, message: "No coupons found for this batch" });
+    }
+
+    res.json({
+      success: true,
+      message: `${result.modifiedCount} coupons from batch deleted successfully`,
+      deletedCount: result.modifiedCount,
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
 // ─────────────────────────────────────────────
 // ADMIN: Usage report for one coupon
 // ─────────────────────────────────────────────
