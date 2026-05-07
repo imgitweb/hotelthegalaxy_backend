@@ -117,11 +117,11 @@ exports.markAttendance = async (req, res) => {
       return res.status(400).json({ success: false, message: "Your shift is already active. Please checkout first." });
     }
 
-    const last20Hours = new Date(Date.now() - 20 * 60 * 60 * 1000);
-    const recentAttendance = await attendance.findOne({ staffId: userId, checkInTime: { $gte: last20Hours } });
-    if (recentAttendance) {
-      return res.status(400).json({ success: false, message: "You cannot mark attendance again within 20 hours." });
-    }
+    // const last20Hours = new Date(Date.now() - 20 * 60 * 60 * 1000);
+    // const recentAttendance = await attendance.findOne({ staffId: userId, checkInTime: { $gte: last20Hours } });
+    // if (recentAttendance) {
+    //   return res.status(400).json({ success: false, message: "You cannot mark attendance again within 20 hours." });
+    // }
 
     let finalRole = "Staff";
     if (role?.toLowerCase() === "rider" || req.riderId || req.user?.riderId) {
