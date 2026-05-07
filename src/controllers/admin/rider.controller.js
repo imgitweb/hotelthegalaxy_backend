@@ -93,16 +93,25 @@ exports.updateRider = async (req, res, next) => {
   }
 };
 
-// NEW: Delete Rider Controller
 exports.deleteRider = async (req, res, next) => {
   try {
-    const rider = await Rider.findByIdAndDelete(req.params.id);
+    const { id } = req.params;
+
+  
+
+    const rider = await Rider.findByIdAndDelete(id);
 
     if (!rider) {
-      return res.status(404).json({ success: false, message: "Rider not found" });
+      return res.status(404).json({
+        success: false,
+        message: "Rider not found",
+      });
     }
 
-    res.json({ success: true, message: "Rider deleted successfully" });
+    res.json({
+      success: true,
+      message: "Rider deleted successfully",
+    });
   } catch (err) {
     next(err);
   }

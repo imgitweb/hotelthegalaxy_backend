@@ -73,7 +73,17 @@ const couponSchema = new mongoose.Schema(
     batchId: {
       type: String,
       default: null,     // Identifies which bulk action generated this
-    }
+    },
+    
+    isSent: {
+    type: Boolean,
+    default: false 
+    },
+
+  isProcessed: { 
+  type: Boolean,
+  default: false
+},
   },
   { timestamps: true }
 );

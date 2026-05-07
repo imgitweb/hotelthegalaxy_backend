@@ -153,7 +153,6 @@ exports.updateStaff = async (req, res, next) => {
     next(err);
   }
 };
-
 exports.deleteStaff = async (req, res, next) => {
   try {
     const { id } = req.params;
@@ -165,11 +164,9 @@ exports.deleteStaff = async (req, res, next) => {
       });
     }
 
-    const staff = await Staff.findOneAndUpdate(
-      { _id: id, isDeleted: false },
-      { isDeleted: true },
-      { new: true }
-    );
+    const staff = await Staff.findOneAndDelete({
+      _id: id,
+    });
 
     if (!staff) {
       return res.status(404).json({
@@ -180,7 +177,7 @@ exports.deleteStaff = async (req, res, next) => {
 
     return res.json({
       success: true,
-      message: "Staff removed successfully",
+      message: "Staff deleted successfully",
     });
   } catch (err) {
     console.error("❌ deleteStaff Error:", err);
