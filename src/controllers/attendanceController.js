@@ -112,25 +112,34 @@ exports.markAttendance = async (req, res) => {
       return res.status(400).json({ success: false, message: "Invalid QR Code" });
     }
 
+    const openShift = await attendance.findOne({ staffId: userId, checkOutTime: null });
+    if (openShift) {
+      return res.status(400).json({ success: false, message: "Your shift is already active. Please checkout first." });
+    }
+
+    const last20Hours = new Date(Date.now() - 20 * 60 * 60 * 1000);
+    const recentAttendance = await attendance.findOne({ staffId: userId, checkInTime: { $gte: last20Hours } });
+    if (recentAttendance) {
+      return res.status(400).json({ success: false, message: "You cannot mark attendance again within 20 hours." });
+    }
+
     let finalRole = "Staff";
     if (role?.toLowerCase() === "rider" || req.riderId || req.user?.riderId) {
       finalRole = "Rider";
     }
 
     const now = new Date();
-    // ✅ Fix: Use standard Date string format to avoid missing helper function errors
-    const dateString = now.toLocaleDateString("en-CA"); 
+    const dateString = now.toLocaleDateString("en-CA");
 
     const newAttendance = new attendance({
       staffId: userId,
-      role: finalRole, 
+      role: finalRole,
       date: dateString,
       checkInTime: now,
       location: { lat: parseFloat(lat), lng: parseFloat(lng) },
       photo: `/uploads/${finalRole.toLowerCase()}/${req.file.filename}`,
       deviceId: deviceId || "unknown",
-      status: "Present", 
-      // ✅ Log initial check-in and automatic "Available" status
+      status: "Present",
       dutyLogs: [
         { action: "CheckIn", time: now },
         { action: "Available", time: now }
@@ -140,29 +149,20 @@ exports.markAttendance = async (req, res) => {
     await newAttendance.save();
 
     if (finalRole === "Rider") {
-      await Rider.findByIdAndUpdate(userId, { 
-        lastAttendanceAt: now,
-        status: "Available" 
-      });
+      await Rider.findByIdAndUpdate(userId, { lastAttendanceAt: now, status: "Available" });
     } else {
-      await Staff.findByIdAndUpdate(userId, { 
-        lastAttendanceAt: now,
-        status: "Available" 
-      });
+      await Staff.findByIdAndUpdate(userId, { lastAttendanceAt: now, status: "Available" });
     }
 
     return res.status(200).json({
       success: true,
-      message: `Attendance marked successfully for ${finalRole} ✅`,
+      message: `Attendance marked successfully for ${finalRole}`,
       data: newAttendance,
     });
 
   } catch (error) {
     if (error.code === 11000) {
-      return res.status(400).json({ 
-        success: false, 
-        message: "Aapki attendance aaj ke liye pehle hi lag chuki hai!" 
-      });
+      return res.status(400).json({ success: false, message: "Attendance already marked for today." });
     }
     console.error("markAttendance error:", error);
     return res.status(500).json({ success: false, message: "Internal Server Error" });
@@ -184,8 +184,10 @@ exports.toggleDutyStatus = async (req, res) => {
     const todayStr = new Date().toLocaleDateString("en-CA");
     
     // Find today's attendance to push the toggle log
-    const todayAttendance = await attendance.findOne({ staffId: userId, date: todayStr });
-
+    const todayAttendance = await attendance.findOne({
+  staffId: userId,
+  checkOutTime: null,
+}).sort({ checkInTime: -1 });
     if (!todayAttendance) {
       return res.status(404).json({ success: false, message: "Please mark your attendance first!" });
     }
@@ -221,10 +223,10 @@ exports.checkoutAttendance = async (req, res) => {
     const now = new Date();
     const todayStr = now.toLocaleDateString("en-CA");
 
-    const todayAttendance = await attendance.findOne({
-      staffId: userId,
-      date: todayStr,
-    });
+const todayAttendance = await attendance.findOne({
+  staffId: userId,
+  checkOutTime: null,
+}).sort({ checkInTime: -1 });
 
     if (!todayAttendance) {
       return res.status(404).json({ success: false, message: "Attendance not found for today." });
@@ -876,9 +878,14 @@ exports.getMyAttendanceStats = async (req, res) => {
           }
 
           // If currently 'Available' but no 'Offline/CheckOut' yet (Ongoing shift)
-          if (!endTime && record.date === new Date().toLocaleDateString("en-CA")) {
-             // Optional: endTime = Date.now(); // Uncomment to show live running hours
-          }
+          // if (!endTime && record.date === new Date().toLocaleDateString("en-CA")) {
+          //    // Optional: endTime = Date.now(); // Uncomment to show live running hours
+          // }
+
+
+          if (!endTime && !record.checkOutTime) {
+  endTime = Date.now(); // Live running hours dikhayega
+}
 
           if (startTime && endTime) {
             totalWorkingMs += (endTime - startTime);

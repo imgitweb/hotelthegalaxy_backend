@@ -67,7 +67,7 @@ const attendanceSchema = new mongoose.Schema(
 );
 
 // Ensure one record per USER per day
-attendanceSchema.index({ staffId: 1, date: 1 }, { unique: true });
+attendanceSchema.index({ staffId: 1, checkInTime: 1 }, { unique: true });
 attendanceSchema.index({ date: 1 });
 
 const attendance = mongoose.model("Attendance", attendanceSchema);
