@@ -758,7 +758,7 @@ async function actionExecutionNode(state) {
                 if (["dispatched", "out_for_delivery"].includes(orderStatus) && order.rider) { 
 
 
-const riderPhone = `0${order.rider.phone}`; 
+const riderPhone = `${order.rider.phone}`; 
 replyText += `🛵 Rider: ${order.rider.name || "Executive"}\n`;
 replyText += `📞 Call Rider: ${riderPhone}\n`;
 
