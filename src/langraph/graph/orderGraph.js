@@ -760,7 +760,7 @@ async function actionExecutionNode(state) {
 const riderPhone = `+91${order.rider.phone}`;
 
 replyText += `🛵 Rider: ${order.rider.name || "Executive"}\n`;
-replyText += `📞 Call Rider: ${riderPhone}\n`;
+replyText += `📞 Call Rider: tel:${riderPhone}\n`;
 
 
                  // replyText += `🛵 Rider: ${order.rider.name || "Executive"} (📞 +91${order.rider.phone})\n`; 
