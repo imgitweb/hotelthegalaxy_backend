@@ -1,139 +1,73 @@
 const mongoose = require("mongoose");
 
+const dutyLogSchema = new mongoose.Schema(
+  {
+    action: {
+      type: String,
+      enum: ["CheckIn", "CheckOut", "Available", "Offline"],
+      required: true,
+    },
+    time: { type: Date, required: true },
+  },
+  { _id: false }
+);
+
 const attendanceSchema = new mongoose.Schema(
   {
     staffId: {
       type: mongoose.Schema.Types.ObjectId,
       required: true,
-      refPath: 'role' 
+ 
     },
 
     role: {
       type: String,
       enum: ["Staff", "Rider"],
-      required: true
+      required: true,
     },
 
-    date: {
+    shift: {
+      type: String,
+      enum: ["Day", "Night"],
+      required: true,
+    },
+
+ 
+    shiftDate: {
       type: String,
       required: true,
     },
 
-    checkInTime: {
-      type: Date,
-      default: Date.now,
-    },
-
-    checkOutTime: {
-      type: Date,
-      default: null,
-    },
-
-    photo: {
+    
+    date: {
       type: String,
+      required: true,
     },
-
-    deviceId: {
-      type: String,
-    },
-
+    checkInTime: { type: Date, required: true },
+    checkOutTime: { type: Date, default: null },
+    
     location: {
-      lat: Number,
-      lng: Number,
+      lat: { type: Number },
+      lng: { type: Number },
     },
+
+    photo: { type: String },
+    deviceId: { type: String, default: "unknown" },
 
     status: {
       type: String,
-      enum: ["Present", "Late", "Absent"],
+      enum: ["Present", "Absent", "Leave"],
       default: "Present",
     },
 
-    // ✅ NEW: Array to track exact times of Online/Offline toggles
-    dutyLogs: [
-      {
-        action: { 
-          type: String, 
-          enum: ["CheckIn", "Available", "Offline", "CheckOut"],
-          required: true 
-        },
-        time: { 
-          type: Date, 
-          default: Date.now 
-        }
-      }
-    ]
+    dutyLogs: [dutyLogSchema],
   },
   { timestamps: true }
 );
-
-// Ensure one record per USER per day
-attendanceSchema.index({ staffId: 1, checkInTime: 1 }, { unique: true });
-attendanceSchema.index({ date: 1 });
+attendanceSchema.index(
+  { staffId: 1, shiftDate: 1, shift: 1 },
+  { unique: true }
+);
 
 const attendance = mongoose.model("Attendance", attendanceSchema);
 module.exports = { attendance };
-
-
-
-
-
-// const mongoose = require("mongoose");
-
-// const attendanceSchema = new mongoose.Schema(
-//   {
-//     staffId: {
-//       type: mongoose.Schema.Types.ObjectId,
-//       required: true,
-//       // dynamically decide reference: Staff or Rider
-//       refPath: 'role' 
-//     },
-
-//     role: {
-//       type: String,
-//       enum: ["Staff", "Rider"],
-//       required: true
-//     },
-
-//     date: {
-//       type: String,
-//       required: true,
-//     },
-
-//     checkInTime: {
-//       type: Date,
-//       default: Date.now,
-//     },
-
-//     checkOutTime: {
-//       type: Date,
-//       default: null,
-//     },
-
-//     photo: {
-//       type: String,
-//     },
-
-//     deviceId: {
-//       type: String,
-//     },
-
-//     location: {
-//       lat: Number,
-//       lng: Number,
-//     },
-
-//     status: {
-//       type: String,
-//       enum: ["Present", "Late", "Absent"],
-//       default: "Present",
-//     },
-//   },
-//   { timestamps: true }
-// );
-
-// // Ensure one record per USER per day
-// attendanceSchema.index({ staffId: 1, date: 1 }, { unique: true });
-// attendanceSchema.index({ date: 1 });
-
-// const attendance = mongoose.model("Attendance", attendanceSchema);
-// module.exports = { attendance };
