@@ -757,11 +757,10 @@ async function actionExecutionNode(state) {
             if (orderStatus !== "pending" && order.paymentStatus !== "pending") {
                 if (["dispatched", "out_for_delivery"].includes(orderStatus) && order.rider) { 
 
-const riderPhone = `+91${order.rider.phone}`;
 
+const riderPhone = `0${order.rider.phone}`; 
 replyText += `🛵 Rider: ${order.rider.name || "Executive"}\n`;
-replyText += `📞 Call Rider: tel:${riderPhone}\n`;
-
+replyText += `📞 Call Rider: ${riderPhone}\n`;
 
                  // replyText += `🛵 Rider: ${order.rider.name || "Executive"} (📞 +91${order.rider.phone})\n`; 
                   const trackingUrl = `https://hotelthegalaxy.in/track-order/${order._id}`;
