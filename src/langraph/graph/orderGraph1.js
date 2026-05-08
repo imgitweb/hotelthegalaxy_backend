@@ -754,7 +754,7 @@ async function actionExecutionNode(state) {
             if (orderStatus !== "pending" && order.paymentStatus !== "pending") {
                 if (["dispatched", "out_for_delivery"].includes(orderStatus) && order.rider) { 
                   replyText += `🛵 Rider: ${order.rider.name || "Executive"} (📞 ${order.rider.phone})\n`; 
-                  const trackingUrl = `https://uat.hotelthegalaxy.in/track-order/${order._id}`;
+                  const trackingUrl = `https://hotelthegalaxy.in/track-order/${order._id}`;
                   replyText += `📍 *Track Here:* ${trackingUrl}\n`;
                 } else { 
                   replyText += `👨‍🍳 Humare chefs preparation kar rahe hain.\n`; 
@@ -821,7 +821,7 @@ async function actionExecutionNode(state) {
         replyText = "Maaf kijiyega, order ID nahi mili.";
         interactive = { type: "button", body: { text: replyText }, action: { buttons: [{ type: "reply", reply: { id: "btn_track", title: "📦 Track Orders" } }] } };
       } else {
-        const trackingUrl = `https://uat.hotelthegalaxy.in/track-order/${orderIdToTrack}`;
+        const trackingUrl = `https://hotelthegalaxy.in/track-order/${orderIdToTrack}`;
         replyText = `📍 *Live Tracking*\n\nAapka rider raste mein hai! Neeche diye link par click karke order ko live track karein:`;
         interactive = { 
             type: "cta_url", 
