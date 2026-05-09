@@ -1,31 +1,97 @@
-// ─── controllers/attendanceController.js ─────────────────────────────────────
 const { attendance } = require("../models/attendance");
 const Staff = require("../models/staffModel");
 const Rider = require("../models/rider.model");
 
-const { detectShift, getShiftDate } = require("../utils/shiftHelper");
-const {
-  calculateWorkingMs,
-  msToHoursStr,
-  msToHoursDecimal,
-} = require("../utils/workingHoursHelper");
+// ─── constants ────────────────────────────────────────────────────────────────
+const MIN_SHIFT_HOURS = 12; // Minimum shift duration enforced at checkout
 
-// ─── helpers ─────────────────────────────────────────────────────────────────
-const todayStr = () => new Date().toLocaleDateString("en-CA"); // YYYY-MM-DD
+// ─── helpers ──────────────────────────────────────────────────────────────────
 
-// ─────────────────────────────────────────────────────────────────────────────
-// 1. Mark Attendance (Start of Shift)
-// ─────────────────────────────────────────────────────────────────────────────
+/** Returns "YYYY-MM-DD" for today in local time */
+const todayStr = () => new Date().toLocaleDateString("en-CA");
+
+/**
+ * Calculates total working milliseconds from dutyLogs.
+ * Only "Available → Offline/CheckOut" chunks are counted.
+ * Ignores CheckIn, CheckOut logs for time calculation.
+ *
+ * @param {Array}  logs        - dutyLogs array from attendance record
+ * @param {Date}   shiftEnd    - The final checkout time (used to close an open Available chunk)
+ * @returns {number}           - Total working time in milliseconds
+ */
+const calculateWorkingMs = (logs, shiftEnd = null) => {
+  const sorted = [...logs].sort((a, b) => new Date(a.time) - new Date(b.time));
+
+  let totalMs = 0;
+  let availableStart = null;
+
+  for (const log of sorted) {
+    if (log.action === "Available") {
+      // Start a new chunk (overwrite if duplicate Available without Offline in between)
+      availableStart = new Date(log.time);
+    } else if ((log.action === "Offline" || log.action === "CheckOut") && availableStart) {
+      // Close the current chunk
+      totalMs += new Date(log.time) - availableStart;
+      availableStart = null;
+    }
+    // CheckIn is ignored for working hours calculation
+  }
+
+  // If shift ended while still Available (e.g. forgot to go Offline before checkout)
+  if (availableStart && shiftEnd) {
+    totalMs += new Date(shiftEnd) - availableStart;
+  }
+
+  return totalMs;
+};
+
+/**
+ * Converts milliseconds to { hours, minutes, str }
+ */
+const msToHoursMinutes = (ms) => {
+  const totalMinutes = Math.floor(ms / (1000 * 60));
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  return { hours, minutes, totalMinutes, str: `${hours}h ${minutes}m` };
+};
+
+/**
+ * Resolves the userId from multiple possible req fields
+ */
+const getUserId = (req) =>
+  req.riderId ||
+  req.staff?.id ||
+  req.user?.id ||
+  req.user?._id ||
+  req.user?.riderId;
+
+/**
+ * Determines the role of the user
+ */
+const getRole = (req, roleFromBody) => {
+  if (
+    roleFromBody?.toLowerCase() === "rider" ||
+    req.riderId ||
+    req.user?.riderId
+  ) {
+    return "Rider";
+  }
+  return "Staff";
+};
+
+// ─── 1. Mark Attendance (Check-In) ───────────────────────────────────────────
+/**
+ * POST /api/attendance/mark
+ * Body: { qrData, lat, lng, deviceId, role }
+ * File: photo (multipart)
+ *
+ * FIX: Uses shiftStart (full timestamp) instead of relying on `date` string
+ *      for midnight-crossing shift lookups.
+ */
 exports.markAttendance = async (req, res) => {
   try {
     const { qrData, lat, lng, deviceId, role } = req.body;
-
-    const userId =
-      req.riderId ||
-      req.staff?.id ||
-      req.user?.id ||
-      req.user?._id ||
-      req.user?.riderId;
+    const userId = getUserId(req);
 
     if (!userId) {
       return res
@@ -45,91 +111,52 @@ exports.markAttendance = async (req, res) => {
         .json({ success: false, message: "Invalid QR Code" });
     }
 
-    // ── Detect shift from current time ───────────────────────────────────────
+    const finalRole = getRole(req, role);
     const now = new Date();
-    const shift = detectShift(now);       // "Day" or "Night"
-    const shiftDate = getShiftDate(now);  // canonical start-date for this shift
+    const dateString = now.toLocaleDateString("en-CA"); // YYYY-MM-DD
 
-    // ── Check: already have an OPEN shift (any shift, not checked out) ───────
-    const openShift = await attendance.findOne({
+    // Check if already checked in today
+    const existing = await attendance.findOne({
       staffId: userId,
-      checkOutTime: null,
+      date: dateString,
     });
-
-    if (openShift) {
+    if (existing) {
       return res.status(400).json({
         success: false,
-        message: `You already have an active ${openShift.shift} shift. Please check out first before starting a new shift.`,
+        message: "Aapki attendance aaj ke liye pehle hi lag chuki hai!",
       });
-    }
-
-    // ── Check: already marked attendance for this exact shift + date ─────────
-    const existingShift = await attendance.findOne({
-      staffId: userId,
-      shiftDate,
-      shift,
-    });
-
-    if (existingShift) {
-      return res.status(400).json({
-        success: false,
-        message: `${shift} shift attendance already marked for ${shiftDate}.`,
-      });
-    }
-
-    // ── Determine role ───────────────────────────────────────────────────────
-    let finalRole = "Staff";
-    if (
-      role?.toLowerCase() === "rider" ||
-      req.riderId ||
-      req.user?.riderId
-    ) {
-      finalRole = "Rider";
     }
 
     const newAttendance = new attendance({
       staffId: userId,
       role: finalRole,
-      shift,
-      shiftDate,
-      date: shiftDate, // backward compat
+      date: dateString,        // Stored for admin date-based queries
+      shiftStart: now,         // ✅ Full timestamp — used for midnight crossing & 12h check
       checkInTime: now,
       location: { lat: parseFloat(lat), lng: parseFloat(lng) },
       photo: `/uploads/${finalRole.toLowerCase()}/${req.file.filename}`,
       deviceId: deviceId || "unknown",
       status: "Present",
       dutyLogs: [
-        { action: "CheckIn", time: now },
-        { action: "Available", time: now },
+        { action: "CheckIn",   time: now, source: "system" },
+        { action: "Available", time: now, source: "system" },
       ],
     });
 
     await newAttendance.save();
 
-    if (finalRole === "Rider") {
-      await Rider.findByIdAndUpdate(userId, {
-        lastAttendanceAt: now,
-        status: "Available",
-      });
-    } else {
-      await Staff.findByIdAndUpdate(userId, {
-        lastAttendanceAt: now,
-        status: "Available",
-      });
-    }
+    const Model = finalRole === "Rider" ? Rider : Staff;
+    await Model.findByIdAndUpdate(userId, {
+      lastAttendanceAt: now,
+      status: "Available",
+    });
 
     return res.status(200).json({
       success: true,
-      message: `${shift} shift attendance marked successfully for ${finalRole}`,
+      message: `Attendance marked successfully for ${finalRole} ✅`,
       data: newAttendance,
     });
   } catch (error) {
-    if (error.code === 11000) {
-      return res.status(400).json({
-        success: false,
-        message: "Attendance already marked for this shift today.",
-      });
-    }
     console.error("markAttendance error:", error);
     return res
       .status(500)
@@ -137,107 +164,167 @@ exports.markAttendance = async (req, res) => {
   }
 };
 
-// ─────────────────────────────────────────────────────────────────────────────
-// 2. Toggle Duty Status (Available ↔ Offline)
-// ─────────────────────────────────────────────────────────────────────────────
+// ─── 2. Toggle Duty Status (Available ↔ Offline) ─────────────────────────────
+/**
+ * POST /api/attendance/toggle
+ * Body: { status: "Available" | "Offline", source: "manual" | "geo" }
+ *
+ * FIX 1: `source` field stored in dutyLog — prevents geo from overriding manual break.
+ * FIX 2: Midnight-safe lookup using shiftStart timestamp range instead of date string.
+ *
+ * Frontend rule (enforce this on client side too):
+ *   - If offlineSource === "manual", geofence enter should NOT send "Available"
+ *   - Only the manual "Go Online" button should send "Available" in that case
+ */
 exports.toggleDutyStatus = async (req, res) => {
   try {
-    const { status } = req.body;
+    const { status, source = "manual" } = req.body;
+    const userId = getUserId(req);
 
-    const userId =
-      req.riderId ||
-      req.staff?.id ||
-      req.user?.id ||
-      req.user?._id ||
-      req.user?.riderId;
+    if (!userId) {
+      return res
+        .status(401)
+        .json({ success: false, message: "Unauthorized" });
+    }
 
     if (!["Available", "Offline"].includes(status)) {
       return res
         .status(400)
-        .json({ success: false, message: "Invalid status. Use Available or Offline." });
+        .json({ success: false, message: "Invalid status. Use 'Available' or 'Offline'." });
     }
 
-    // Find the currently open (active) shift — no checkout yet
-    const activeShift = await attendance
-      .findOne({ staffId: userId, checkOutTime: null })
-      .sort({ checkInTime: -1 });
+    if (!["manual", "geo", "system"].includes(source)) {
+      return res
+        .status(400)
+        .json({ success: false, message: "Invalid source. Use 'manual', 'geo', or 'system'." });
+    }
+
+    // ✅ FIX: Midnight-safe lookup
+    // Instead of matching by date string, find a shift that:
+    //   - Belongs to this user
+    //   - Has no checkOutTime yet (still active)
+    //   - Started within the last 30 hours (covers any overnight shift)
+    const cutoff = new Date(Date.now() - 30 * 60 * 60 * 1000);
+    const activeShift = await attendance.findOne({
+      staffId: userId,
+      checkOutTime: null,
+      shiftStart: { $gte: cutoff },
+    });
 
     if (!activeShift) {
       return res.status(404).json({
         success: false,
-        message: "No active shift found. Please mark your attendance first!",
+        message: "Koi active shift nahi mili. Pehle check-in karein.",
       });
     }
 
-    activeShift.dutyLogs.push({ action: status, time: new Date() });
-    await activeShift.save();
-
-    if (activeShift.role === "Rider") {
-      await Rider.findByIdAndUpdate(userId, { status });
-    } else {
-      await Staff.findByIdAndUpdate(userId, { status });
+    // ✅ Prevent duplicate consecutive same-status logs
+    const lastLog = activeShift.dutyLogs[activeShift.dutyLogs.length - 1];
+    if (lastLog && lastLog.action === status) {
+      return res.json({
+        success: true,
+        message: `Already ${status}`,
+        status,
+        alreadySet: true,
+      });
     }
 
-    res.json({
+    activeShift.dutyLogs.push({ action: status, time: new Date(), source });
+    await activeShift.save();
+
+    const Model = activeShift.role === "Rider" ? Rider : Staff;
+    await Model.findByIdAndUpdate(userId, { status });
+
+    return res.json({
       success: true,
       message: `Duty status changed to ${status}`,
       status,
+      source,
     });
   } catch (error) {
-    console.error("Toggle Status Error:", error);
-    res.status(500).json({ success: false, message: "Server Error" });
+    console.error("toggleDutyStatus error:", error);
+    return res
+      .status(500)
+      .json({ success: false, message: "Server Error" });
   }
 };
 
-// ─────────────────────────────────────────────────────────────────────────────
-// 3. Checkout Attendance (End of Shift)
-// ─────────────────────────────────────────────────────────────────────────────
+// ─── 3. Checkout Attendance (End of Shift) ────────────────────────────────────
+/**
+ * POST /api/attendance/checkout
+ *
+ * FIX 1: Midnight-safe lookup using shiftStart, not date string.
+ * FIX 2: Enforces minimum 12-hour shift duration.
+ *        If staff checks out early, checkOutTime is set to shiftStart + 12h.
+ * FIX 3: Working hours calculated from Available chunks, not checkIn→checkOut diff.
+ */
 exports.checkoutAttendance = async (req, res) => {
   try {
-    const userId =
-      req.riderId ||
-      req.staff?.id ||
-      req.user?.id ||
-      req.user?._id ||
-      req.user?.riderId;
+    const userId = getUserId(req);
+    if (!userId) {
+      return res
+        .status(401)
+        .json({ success: false, message: "Unauthorized" });
+    }
 
-    const now = new Date();
-
-    // Find the currently open shift
-    const activeShift = await attendance
-      .findOne({ staffId: userId, checkOutTime: null })
-      .sort({ checkInTime: -1 });
+    // ✅ FIX: Midnight-safe active shift lookup
+    const cutoff = new Date(Date.now() - 30 * 60 * 60 * 1000);
+    const activeShift = await attendance.findOne({
+      staffId: userId,
+      checkOutTime: null,
+      shiftStart: { $gte: cutoff },
+    });
 
     if (!activeShift) {
       return res.status(404).json({
         success: false,
-        message: "No active shift found. Nothing to check out from.",
+        message: "Koi active shift nahi mili.",
       });
     }
 
-    activeShift.checkOutTime = now;
-    activeShift.dutyLogs.push({ action: "CheckOut", time: now });
-    await activeShift.save();
+    const now = new Date();
+    const shiftDurationMs = now - new Date(activeShift.shiftStart);
+    const minDurationMs = MIN_SHIFT_HOURS * 60 * 60 * 1000;
 
-    if (activeShift.role === "Rider") {
-      await Rider.findByIdAndUpdate(userId, { status: "Offline" });
-    } else {
-      await Staff.findByIdAndUpdate(userId, { status: "Offline" });
+    // ✅ FIX: 12-hour minimum enforcement
+    let checkoutTime = now;
+    let forcedCheckout = false;
+
+    if (shiftDurationMs < minDurationMs) {
+      checkoutTime = new Date(
+        new Date(activeShift.shiftStart).getTime() + minDurationMs
+      );
+      forcedCheckout = true;
     }
 
-    // Calculate final working hours for response
-    const workingMs = calculateWorkingMs(
-      activeShift.dutyLogs,
-      activeShift.checkOutTime
+    // ✅ Log Offline + CheckOut at the enforced checkout time
+    activeShift.dutyLogs.push(
+      { action: "Offline",   time: checkoutTime, source: "system" },
+      { action: "CheckOut",  time: checkoutTime, source: "system" }
     );
+    activeShift.checkOutTime = checkoutTime;
+    activeShift.forcedCheckout = forcedCheckout;
+
+    await activeShift.save();
+
+    // ✅ FIX: Calculate working hours from Available chunks only
+    const workingMs = calculateWorkingMs(activeShift.dutyLogs, checkoutTime);
+    const { hours, minutes, totalMinutes } = msToHoursMinutes(workingMs);
+
+    const Model = activeShift.role === "Rider" ? Rider : Staff;
+    await Model.findByIdAndUpdate(userId, { status: "Offline" });
 
     return res.status(200).json({
       success: true,
-      message: "Shift ended successfully.",
+      message: forcedCheckout
+        ? `Shift 12 ghante se pehle end nahi ho sakti. Checkout time: ${checkoutTime.toLocaleTimeString()} set kiya gaya. ⚠️`
+        : "Shift ended successfully. ✅",
       data: {
-        ...activeShift._doc,
-        workingHoursStr: msToHoursStr(workingMs),
-        totalMinutes: Math.floor(workingMs / 60000),
+        shiftStart: activeShift.shiftStart,
+        checkOutTime: checkoutTime,
+        forcedCheckout,
+        workingHours: `${hours}h ${minutes}m`,
+        totalMinutes,
       },
     });
   } catch (error) {
@@ -248,9 +335,11 @@ exports.checkoutAttendance = async (req, res) => {
   }
 };
 
-// ─────────────────────────────────────────────────────────────────────────────
-// 4. Get Attendance List (Admin — with filters, search, pagination)
-// ─────────────────────────────────────────────────────────────────────────────
+// ─── 4. Get All Attendance (Admin) ───────────────────────────────────────────
+/**
+ * GET /api/admin/attendance
+ * Query: date, department, status, search, role, page, limit
+ */
 exports.getAttendance = async (req, res) => {
   try {
     const {
@@ -259,7 +348,6 @@ exports.getAttendance = async (req, res) => {
       status = "",
       search = "",
       role = "",
-      shift = "",    // NEW: filter by "Day" or "Night"
       page = 1,
       limit = 10,
     } = req.query;
@@ -269,14 +357,12 @@ exports.getAttendance = async (req, res) => {
     const skip = (pg - 1) * lim;
 
     const matchStage = {
-      shiftDate: date, // use shiftDate for date filtering
+      date,
       ...(status && { status }),
-      ...(shift && { shift: { $regex: `^${shift}$`, $options: "i" } }),
     };
 
     const pipeline = [
       { $match: matchStage },
-
       {
         $lookup: {
           from: "staffs",
@@ -304,8 +390,6 @@ exports.getAttendance = async (req, res) => {
           },
         },
       },
-
-      // Search filter
       ...(search
         ? [
             {
@@ -318,40 +402,15 @@ exports.getAttendance = async (req, res) => {
             },
           ]
         : []),
-
-      // Department filter
       ...(department
         ? [{ $match: { "user.department": department } }]
         : []),
-
-      // Role filter
       ...(role
-        ? [
-            {
-              $match: {
-                role: { $regex: `^${role}$`, $options: "i" },
-              },
-            },
-          ]
+        ? [{ $match: { role: { $regex: `^${role}$`, $options: "i" } } }]
         : []),
-
-      // Replace staffId field with populated user object
-      {
-        $addFields: {
-          staffId: "$user",
-        },
-      },
-
-      {
-        $project: {
-          staff: 0,
-          rider: 0,
-          user: 0,
-        },
-      },
-
+      { $addFields: { staffId: "$user" } },
+      { $project: { staff: 0, rider: 0, user: 0 } },
       { $sort: { checkInTime: 1 } },
-
       {
         $facet: {
           data: [{ $skip: skip }, { $limit: lim }],
@@ -364,19 +423,9 @@ exports.getAttendance = async (req, res) => {
     const data = result[0].data;
     const total = result[0].total[0]?.count || 0;
 
-    // Add working hours to each record (calculated in JS for accuracy)
-    const enriched = data.map((rec) => {
-      const workingMs = calculateWorkingMs(rec.dutyLogs, rec.checkOutTime);
-      return {
-        ...rec,
-        workingHoursStr: msToHoursStr(workingMs),
-        totalMinutes: Math.floor(workingMs / 60000),
-      };
-    });
-
     return res.json({
       success: true,
-      data: enriched,
+      data,
       total,
       page: pg,
       totalPages: Math.ceil(total / lim),
@@ -387,38 +436,37 @@ exports.getAttendance = async (req, res) => {
   }
 };
 
-// ─────────────────────────────────────────────────────────────────────────────
-// 5. Get Stats (Admin — today's summary)
-// ─────────────────────────────────────────────────────────────────────────────
+// ─── 5. Get Stats (Admin Dashboard) ─────────────────────────────────────────
+/**
+ * GET /api/admin/attendance/stats
+ * Query: date (YYYY-MM-DD)
+ *
+ * FIX: Working hours now calculated from Available chunks via dutyLogs,
+ *      not from checkIn→checkOut difference.
+ */
 exports.getStats = async (req, res) => {
   try {
     const date = req.query.date || todayStr();
 
-    // Total headcount
-    const totalStaff = await Staff.countDocuments({
-      isActive: true,
-      isDeleted: false,
-    });
+    const totalStaff = await Staff.countDocuments({ isActive: true, isDeleted: false });
     const totalRiders = await Rider.countDocuments();
     const totalEmployees = totalStaff + totalRiders;
 
-    // Fetch all attendance records for the date (using shiftDate)
-    const records = await attendance.find({ shiftDate: date });
+    const records = await attendance.find({ date });
 
-    const presentCount = records.length;
-
-    // Calculate total working ms using the shared helper (accurate)
+    let presentCount = records.length;
     let totalWorkingMs = 0;
-    for (const rec of records) {
-      totalWorkingMs += calculateWorkingMs(rec.dutyLogs, rec.checkOutTime);
+
+    for (const record of records) {
+      // ✅ FIX: Use Available-chunk calculation instead of checkIn→checkOut
+      totalWorkingMs += calculateWorkingMs(
+        record.dutyLogs,
+        record.checkOutTime || null
+      );
     }
 
     const absent = Math.max(0, totalEmployees - presentCount);
-    const totalWorkingHours = msToHoursDecimal(totalWorkingMs);
-
-    // Break down by shift
-    const dayShiftCount = records.filter((r) => r.shift === "Day").length;
-    const nightShiftCount = records.filter((r) => r.shift === "Night").length;
+    const totalWorkingHours = (totalWorkingMs / 3600000).toFixed(1);
 
     return res.json({
       success: true,
@@ -429,8 +477,6 @@ exports.getStats = async (req, res) => {
         present: presentCount,
         absent,
         totalWorkingHours,
-        dayShift: dayShiftCount,
-        nightShift: nightShiftCount,
       },
     });
   } catch (err) {
@@ -439,9 +485,12 @@ exports.getStats = async (req, res) => {
   }
 };
 
-// ─────────────────────────────────────────────────────────────────────────────
-// 6. Get Weekly Summary (Admin)
-// ─────────────────────────────────────────────────────────────────────────────
+// ─── 6. Get Weekly Report (Admin) ────────────────────────────────────────────
+/**
+ * GET /api/admin/attendance/weekly
+ *
+ * FIX: Working hours from Available chunks.
+ */
 exports.getWeekly = async (req, res) => {
   try {
     const days = [];
@@ -451,64 +500,43 @@ exports.getWeekly = async (req, res) => {
       days.push(d.toLocaleDateString("en-CA"));
     }
 
-    // Fetch raw records for the week
-    const records = await attendance
-      .find({ shiftDate: { $in: days } })
-      .lean();
+    const records = await attendance.find({ date: { $in: days } });
 
     // Group by staffId
     const grouped = {};
-    for (const rec of records) {
-      const key = rec.staffId.toString();
-      if (!grouped[key]) {
-        grouped[key] = {
-          staffId: rec.staffId,
-          role: rec.role,
-          records: [],
-        };
+    for (const record of records) {
+      const id = record.staffId.toString();
+      if (!grouped[id]) {
+        grouped[id] = { staffId: record.staffId, role: record.role, records: [] };
       }
-      grouped[key].records.push(rec);
+      grouped[id].records.push(record);
     }
 
-    // Lookup staff/rider names
-    const staffIds = Object.keys(grouped).map(
-      (k) => new (require("mongoose").Types.ObjectId)(k)
-    );
-
-    const [staffList, riderList] = await Promise.all([
-      Staff.find({ _id: { $in: staffIds } })
-        .select("name phone department")
-        .lean(),
-      Rider.find({ _id: { $in: staffIds } })
-        .select("name phone department")
-        .lean(),
+    // Lookup user info
+    const [allStaff, allRiders] = await Promise.all([
+      Staff.find({}, "name phone department").lean(),
+      Rider.find({}, "name phone").lean(),
     ]);
-
     const userMap = {};
-    for (const s of staffList) userMap[s._id.toString()] = s;
-    for (const r of riderList) userMap[r._id.toString()] = r;
+    for (const s of allStaff) userMap[s._id.toString()] = { ...s, dept: s.department };
+    for (const r of allRiders) userMap[r._id.toString()] = { ...r, dept: "Riders Fleet" };
 
-    const result = Object.values(grouped).map((g) => {
-      const user = userMap[g.staffId.toString()];
-      const totalWorkingMs = g.records.reduce(
-        (sum, rec) => sum + calculateWorkingMs(rec.dutyLogs, rec.checkOutTime),
+    const result = Object.values(grouped).map(({ staffId, role, records }) => {
+      const id = staffId.toString();
+      const user = userMap[id];
+      const totalWorkingMs = records.reduce(
+        (sum, r) => sum + calculateWorkingMs(r.dutyLogs, r.checkOutTime || null),
         0
       );
-
       return {
-        staffId: g.staffId,
+        staffId,
         name: user?.name || "Unknown",
         phone: user?.phone || "N/A",
-        department:
-          user?.department ||
-          (g.role === "Rider" ? "Riders Fleet" : "Unknown"),
-        role: g.role,
-        presentDays: g.records.length,
-        absentDays: Math.max(0, 7 - g.records.length),
-        workingHours: msToHoursDecimal(totalWorkingMs),
-        workingHoursStr: msToHoursStr(totalWorkingMs),
-        dayShifts: g.records.filter((r) => r.shift === "Day").length,
-        nightShifts: g.records.filter((r) => r.shift === "Night").length,
+        department: user?.dept || (role === "Rider" ? "Riders Fleet" : "Unknown"),
+        role,
+        presentDays: records.length,
+        absentDays: Math.max(0, 7 - records.length),
+        workingHours: (totalWorkingMs / 3600000).toFixed(1),
       };
     });
 
@@ -521,9 +549,12 @@ exports.getWeekly = async (req, res) => {
   }
 };
 
-// ─────────────────────────────────────────────────────────────────────────────
-// 7. Get Monthly Summary (Admin)
-// ─────────────────────────────────────────────────────────────────────────────
+// ─── 7. Get Monthly Report (Admin) ───────────────────────────────────────────
+/**
+ * GET /api/admin/attendance/monthly
+ *
+ * FIX: Working hours from Available chunks.
+ */
 exports.getMonthly = async (req, res) => {
   try {
     const now = new Date();
@@ -531,133 +562,111 @@ exports.getMonthly = async (req, res) => {
     const month = String(now.getMonth() + 1).padStart(2, "0");
     const prefix = `${year}-${month}-`;
 
-    // How many distinct shift-dates have records so far this month
-    const distinctDays = await attendance.distinct("shiftDate", {
-      shiftDate: { $regex: `^${prefix}` },
-    });
-    const workingDays = distinctDays.length || 1;
+    const records = await attendance.find({ date: { $regex: `^${prefix}` } });
 
-    // Fetch raw records
-    const records = await attendance
-      .find({ shiftDate: { $regex: `^${prefix}` } })
-      .lean();
+    const distinctDays = [...new Set(records.map((r) => r.date))];
+    const workingDays = distinctDays.length || 1;
 
     // Group by staffId
     const grouped = {};
-    for (const rec of records) {
-      const key = rec.staffId.toString();
-      if (!grouped[key]) {
-        grouped[key] = { staffId: rec.staffId, role: rec.role, records: [] };
+    for (const record of records) {
+      const id = record.staffId.toString();
+      if (!grouped[id]) {
+        grouped[id] = { staffId: record.staffId, role: record.role, records: [] };
       }
-      grouped[key].records.push(rec);
+      grouped[id].records.push(record);
     }
 
-    const staffIds = Object.keys(grouped).map(
-      (k) => new (require("mongoose").Types.ObjectId)(k)
-    );
-
-    const [staffList, riderList] = await Promise.all([
-      Staff.find({ _id: { $in: staffIds } })
-        .select("name phone department")
-        .lean(),
-      Rider.find({ _id: { $in: staffIds } })
-        .select("name phone department")
-        .lean(),
+    const [allStaff, allRiders] = await Promise.all([
+      Staff.find({}, "name phone department").lean(),
+      Rider.find({}, "name phone").lean(),
     ]);
-
     const userMap = {};
-    for (const s of staffList) userMap[s._id.toString()] = s;
-    for (const r of riderList) userMap[r._id.toString()] = r;
+    for (const s of allStaff) userMap[s._id.toString()] = { ...s, dept: s.department };
+    for (const r of allRiders) userMap[r._id.toString()] = { ...r, dept: "Riders Fleet" };
 
-    const result = Object.values(grouped).map((g) => {
-      const user = userMap[g.staffId.toString()];
-      const totalWorkingMs = g.records.reduce(
-        (sum, rec) => sum + calculateWorkingMs(rec.dutyLogs, rec.checkOutTime),
+    const result = Object.values(grouped).map(({ staffId, role, records }) => {
+      const id = staffId.toString();
+      const user = userMap[id];
+      const totalWorkingMs = records.reduce(
+        (sum, r) => sum + calculateWorkingMs(r.dutyLogs, r.checkOutTime || null),
         0
       );
-
       return {
-        staffId: g.staffId,
+        staffId,
         name: user?.name || "Unknown",
         phone: user?.phone || "N/A",
-        department:
-          user?.department ||
-          (g.role === "Rider" ? "Riders Fleet" : "Unknown"),
-        role: g.role,
-        presentDays: g.records.length,
-        absentDays: Math.max(0, workingDays - g.records.length),
-        workingHours: msToHoursDecimal(totalWorkingMs),
-        workingHoursStr: msToHoursStr(totalWorkingMs),
-        dayShifts: g.records.filter((r) => r.shift === "Day").length,
-        nightShifts: g.records.filter((r) => r.shift === "Night").length,
+        department: user?.dept || (role === "Rider" ? "Riders Fleet" : "Unknown"),
+        role,
+        presentDays: records.length,
+        absentDays: Math.max(0, workingDays - records.length),
+        workingHours: (totalWorkingMs / 3600000).toFixed(1),
       };
     });
 
     result.sort((a, b) => b.workingHours - a.workingHours);
 
-    return res.json({
-      success: true,
-      data: { workingDays, list: result },
-    });
+    return res.json({ success: true, data: { workingDays, list: result } });
   } catch (err) {
     console.error("getMonthly error:", err);
     return res.status(500).json({ message: "Internal Server Error" });
   }
 };
 
-// ─────────────────────────────────────────────────────────────────────────────
-// 8. Get My Attendance Stats (Staff/Rider — personal view)
-// ─────────────────────────────────────────────────────────────────────────────
+// ─── 8. Get My Attendance Stats (Staff/Rider Self View) ──────────────────────
+/**
+ * GET /api/attendance/my-stats
+ * Query: month (YYYY-MM)
+ *
+ * FIX 1: Midnight-safe — uses shiftStart-based lookup for active shift.
+ * FIX 2: Working hours from Available chunks only.
+ * FIX 3: Live running hours shown for ongoing shift (currently Available).
+ */
 exports.getMyAttendanceStats = async (req, res) => {
   try {
-    const staffId =
-      req.user?.id ||
-      req.staff?.id ||
-      req.user?._id ||
-      req.user?.riderId;
-
-    const { month } = req.query; // Expected: "YYYY-MM"
-
+    const staffId = getUserId(req);
     if (!staffId) {
       return res.status(401).json({ message: "Unauthorized" });
     }
 
+    const { month } = req.query; // "YYYY-MM"
+
     let targetDate = new Date();
-    if (month) {
-      targetDate = new Date(`${month}-01`);
-    }
+    if (month) targetDate = new Date(`${month}-01`);
 
     const y = targetDate.getFullYear();
     const m = targetDate.getMonth() + 1;
     const monthPrefix = `${y}-${m.toString().padStart(2, "0")}`;
 
-    // Fetch all records for this month (by shiftDate)
     const records = await attendance
-      .find({
-        staffId,
-        shiftDate: { $regex: `^${monthPrefix}` },
-      })
-      .sort({ shiftDate: -1, checkInTime: -1 })
-      .lean();
+      .find({ staffId, date: { $regex: `^${monthPrefix}` } })
+      .sort({ date: -1 });
 
-    // Enrich each record with computed working hours
     const processedRecords = records.map((record) => {
-      const workingMs = calculateWorkingMs(
-        record.dutyLogs,
-        record.checkOutTime
-      );
+      const shiftEnd = record.checkOutTime || null;
+
+      // ✅ For ongoing shifts: if last log is "Available" and no checkout yet,
+      //    count up to right now so live hours are visible
+      let effectiveEnd = shiftEnd;
+      if (!shiftEnd) {
+        const lastLog = record.dutyLogs[record.dutyLogs.length - 1];
+        if (lastLog && lastLog.action === "Available") {
+          effectiveEnd = new Date(); // Live calculation
+        }
+      }
+
+      const workingMs = calculateWorkingMs(record.dutyLogs, effectiveEnd);
+      const { hours, minutes, totalMinutes } = msToHoursMinutes(workingMs);
+
       return {
-        ...record,
-        workingHoursStr: msToHoursStr(workingMs),
-        totalMinutes: Math.floor(workingMs / 60000),
+        ...record._doc,
+        workingHoursStr: `${hours}h ${minutes}m`,
+        totalMinutes,
+        isOngoing: !shiftEnd,
       };
     });
 
-    // For present count: count unique shiftDates (one day = present even with 2 shifts)
-    const uniqueDates = new Set(records.map((r) => r.shiftDate));
-    const presentCount = uniqueDates.size;
-
-    // Days passed in this month
+    const presentCount = processedRecords.length;
     const today = new Date();
     const daysPassedInMonth =
       y === today.getFullYear() && m - 1 === today.getMonth()
@@ -666,30 +675,22 @@ exports.getMyAttendanceStats = async (req, res) => {
 
     const absentCount = Math.max(0, daysPassedInMonth - presentCount);
 
-    let performanceStatus = "Excellent";
-    if (absentCount > 5) performanceStatus = "Poor";
-    else if (absentCount > 2) performanceStatus = "Average";
-
     return res.status(200).json({
       success: true,
       stats: {
         present: presentCount,
         absent: absentCount,
-        status: performanceStatus,
+        status:
+          absentCount <= 2 ? "Excellent" : absentCount <= 5 ? "Average" : "Poor",
         recentLogs: processedRecords,
       },
     });
   } catch (error) {
-    console.error("Fetch Stats Error:", error);
+    console.error("getMyAttendanceStats error:", error);
     return res
       .status(500)
       .json({ success: false, message: "Error fetching stats" });
   }
 };
 
-// ─────────────────────────────────────────────────────────────────────────────
-// ALIASES — purane route names ke liye (routes file change nahi karni)
-// ─────────────────────────────────────────────────────────────────────────────
-exports.checkOut        = exports.checkoutAttendance;   // /checkout route
-exports.toggleStatus    = exports.toggleDutyStatus;     // /status route
-exports.getMyStats      = exports.getMyAttendanceStats; // /my-stats route
+exports.checkOut = exports.checkoutAttendance;
