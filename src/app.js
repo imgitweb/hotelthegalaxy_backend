@@ -143,7 +143,7 @@ app.use("/api/v1/roster",checkItemAvailability);
 
 app.use("/api/v1/settings", settingRoutes);
 app.use("/api/webhook", whatsappRoutes);
-// app.use("/api/chat", chatRoutes);
+app.use("/api/chat", chatRoutes);
 
 app.use("/api/v1/dining/offers", offerRoutepublic);
 app.use("/api/v1/admin/dashboard", dashboardRoutes);

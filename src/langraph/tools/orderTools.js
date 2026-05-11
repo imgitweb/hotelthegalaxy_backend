@@ -206,20 +206,121 @@ async function getPaymentLinkByOrderId(orderId) {
   } catch (error) { return null; }
 }
 
+// async function getTodayRosterItems() { 
+//   const today = new Date(); today.setHours(0, 0, 0, 0);
+//   const roster = await DailyRoster.findOne({ date: { $gte: today, $lt: new Date(today.getTime() + 24 * 60 * 60 * 1000) } }).populate("items.id"); 
+  
+//   let activeOffers = [];
+//   try {
+//     const now = new Date();
+//     const startOfToday = new Date(now);
+//     startOfToday.setUTCHours(0, 0, 0, 0);
+
+//     activeOffers = await Offer.find({ 
+//         isActive: true,
+//         startDate: { $lte: now }, 
+//         endDate: { $gte: startOfToday }
+//     }).lean();
+//   } catch(e) { console.error("Offer fetch error:", e); }
+
+//   let items = [];
+  
+//   if (roster && roster.items) {
+//     const regularItems = roster.items.filter(item => item.id && item.quantity > 0).map(item => {
+//       let originalPrice = item.id.basePrice;
+//       let finalPrice = originalPrice;
+//       let appliedOffer = null;
+
+//       for(let offer of activeOffers) {
+//         if (offer.items && offer.items.map(i => String(i)).includes(String(item.id._id))) {
+//           if (offer.discountType === "PERCENTAGE") {
+//             finalPrice = finalPrice - (finalPrice * offer.discountValue / 100);
+//           } else if (offer.discountType === "FLAT") {
+//             finalPrice = finalPrice - offer.discountValue;
+//           }
+//           appliedOffer = offer.name;
+//           break; 
+//         }
+//       }
+//       finalPrice = Math.max(0, Math.round(finalPrice));
+
+//       return { 
+//         _id: item.id._id, 
+//         name: item.id.name, 
+//         basePrice: finalPrice, 
+//         originalPrice: originalPrice, 
+//         category: item.id.category, 
+//         maxAllowed: item.quantity, 
+//         availableNow: item.quantity,
+//         isCombo: false,
+//         offerName: appliedOffer
+//       };
+//     });
+//     items.push(...regularItems);
+//   }
+
+//   try {
+//       const combos = await Combo.find({}).populate("items.item", "name").lean();
+      
+//       const comboItems = combos.map(c => {
+//          let originalPrice = c.price;
+//          let finalPrice = originalPrice;
+//          let appliedOffer = null;
+
+//          for(let offer of activeOffers) {
+//            if (offer.combos && offer.combos.map(id => String(id)).includes(String(c._id))) {
+//              if (offer.discountType === "PERCENTAGE") {
+//                finalPrice = finalPrice - (finalPrice * offer.discountValue / 100);
+//              } else if (offer.discountType === "FLAT") {
+//                finalPrice = finalPrice - offer.discountValue;
+//              }
+//              appliedOffer = offer.name;
+//              break;
+//            }
+//          }
+//          finalPrice = Math.max(0, Math.round(finalPrice));
+
+//          let includedNames = "";
+//          if (c.items && c.items.length > 0) {
+//              includedNames = c.items.map(i => i.item && i.item.name ? i.item.name : "").filter(Boolean).join(" + ");
+//          }
+
+//          return {
+//              _id: c._id,
+//              name: `${c.name}`, 
+//              basePrice: finalPrice,
+//              originalPrice: originalPrice,
+//              category: "combos_virtual",
+//              maxAllowed: 10, 
+//              availableNow: 10,
+//              isCombo: true,
+//              offerName: appliedOffer,
+//              includedItems: includedNames 
+//          };
+//       });
+//       items.push(...comboItems);
+//   } catch(e) { console.log("Combo fetch error:", e); }
+
+//   return items;
+// }
+
 async function getTodayRosterItems() { 
-  const today = new Date(); today.setHours(0, 0, 0, 0);
-  const roster = await DailyRoster.findOne({ date: { $gte: today, $lt: new Date(today.getTime() + 24 * 60 * 60 * 1000) } }).populate("items.id"); 
+  const now = new Date();
+  const istOffset = 5.5 * 60 * 60 * 1000;
+  const istTime = new Date(now.getTime() + now.getTimezoneOffset() * 60000 + istOffset);
+  const startOfDay = new Date(Date.UTC(istTime.getFullYear(), istTime.getMonth(), istTime.getDate() - 1, 18, 30, 0));
+  const endOfDay = new Date(startOfDay.getTime() + 24 * 60 * 60 * 1000);
+
+  const roster = await DailyRoster.findOne({ 
+    date: { $gte: startOfDay, $lt: endOfDay } 
+  }).populate("items.id"); 
   
   let activeOffers = [];
   try {
-    const now = new Date();
-    const startOfToday = new Date(now);
-    startOfToday.setUTCHours(0, 0, 0, 0);
-
     activeOffers = await Offer.find({ 
         isActive: true,
         startDate: { $lte: now }, 
-        endDate: { $gte: startOfToday }
+        endDate: { $gte: startOfDay }
     }).lean();
   } catch(e) { console.error("Offer fetch error:", e); }
 
