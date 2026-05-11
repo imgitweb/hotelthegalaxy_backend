@@ -8,8 +8,6 @@ const AUTO_CLOSE_THRESHOLD_HOURS = 16;
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
 const todayStr = () => new Date().toLocaleDateString("en-CA");
-/** Returns "YYYY-MM-DD" for today in local time */
-// const todayStr = () => new Date().toLocaleDateString("en-CA");
 
 const calculateWorkingMs = (logs, shiftEnd = null) => {
   const sorted = [...logs].sort((a, b) => new Date(a.time) - new Date(b.time));
@@ -32,10 +30,20 @@ const calculateWorkingMs = (logs, shiftEnd = null) => {
 };
 
 const msToHoursMinutes = (ms) => {
+  if (!ms || isNaN(ms)) return { hours: 0, minutes: 0, totalMinutes: 0, str: "0h 0m" };
   const totalMinutes = Math.floor(ms / (1000 * 60));
   const hours = Math.floor(totalMinutes / 60);
   const minutes = totalMinutes % 60;
   return { hours, minutes, totalMinutes, str: `${hours}h ${minutes}m` };
+};
+
+const msToHoursStr = (ms) => {
+  return msToHoursMinutes(ms).str;
+};
+
+const msToHoursDecimal = (ms) => {
+  if (!ms || isNaN(ms)) return 0;
+  return ms / (1000 * 60 * 60);
 };
 
 const getUserId = (req) => req.riderId || req.staff?.id || req.user?.id || req.user?._id || req.user?.riderId;
@@ -45,19 +53,7 @@ const getRole = (req, roleFromBody) => {
   return "Staff";
 };
 
-/**
- * Resolves the userId from multiple possible req fields
- */
-
-// ─── 1. Mark Attendance (Check-In) ───────────────────────────────────────────
-/**
- * POST /api/attendance/mark
- * Body: { qrData, lat, lng, deviceId, role }
- * File: photo (multipart)
- *
- * FIX: Uses shiftStart (full timestamp) instead of relying on `date` string
- *      for midnight-crossing shift lookups.
- */
+// ─── Auto-Close Shift Logic ───────────────────────────────────────────────────
 const checkAndAutoCloseShift = async (userId) => {
   const activeShift = await attendance.findOne({ staffId: userId, checkOutTime: null });
   if (!activeShift) return null;
@@ -95,7 +91,6 @@ exports.markAttendance = async (req, res) => {
     if (!req.file) return res.status(400).json({ success: false, message: "Photo is required" });
     if (qrData !== process.env.QR_ID) return res.status(400).json({ success: false, message: "Invalid QR Code" });
 
-    // 1. Auto-close old forgotten shift if exists
     const activeShift = await checkAndAutoCloseShift(userId);
     
     if (activeShift) {
@@ -107,9 +102,8 @@ exports.markAttendance = async (req, res) => {
 
     const finalRole = getRole(req, role);
     const now = new Date();
-    const dateString = now.toLocaleDateString("en-CA"); // Saves the grouping date
+    const dateString = now.toLocaleDateString("en-CA"); 
 
-    // 2. Prevent Double check-in on the exact same date
     const existing = await attendance.findOne({ staffId: userId, date: dateString });
     if (existing) {
       return res.status(400).json({
@@ -126,7 +120,7 @@ exports.markAttendance = async (req, res) => {
       role: finalRole,
       shift: shiftType,
       date: dateString,
-      shiftStart: now,         // CRITICAL: Base for calculating 12h max limit
+      shiftStart: now,         
       checkInTime: now,
       location: { lat: parseFloat(lat), lng: parseFloat(lng) },
       photo: `/uploads/${finalRole.toLowerCase()}/${req.file.filename}`,
@@ -162,7 +156,6 @@ exports.toggleDutyStatus = async (req, res) => {
 
     if (!userId) return res.status(401).json({ success: false, message: "Unauthorized" });
 
-    // Handle forgotten shifts silently
     const activeShift = await checkAndAutoCloseShift(userId);
 
     if (!activeShift) {
@@ -201,7 +194,6 @@ exports.checkoutAttendance = async (req, res) => {
 
     const now = new Date();
     
-    // Normal Manual Checkout
     activeShift.dutyLogs.push(
       { action: "Offline", time: now, source: "manual" },
       { action: "CheckOut", time: now, source: "manual" }
@@ -233,9 +225,7 @@ exports.checkoutAttendance = async (req, res) => {
   }
 };
 
-
-
-
+// ─── 4. Get Attendance Records ────────────────────────────────────────────────
 exports.getAttendance = async (req, res) => {
   try {
     const {
@@ -252,9 +242,9 @@ exports.getAttendance = async (req, res) => {
     const lim = Math.min(100, Math.max(1, parseInt(limit)));
     const skip = (pg - 1) * lim;
 
-    // Use shiftDate to accurately match the shift logic
+    // ✅ FIX: Use 'date' instead of 'shiftDate' to match MongoDB schema
     const matchStage = {
-      shiftDate: date,
+      date: date,
       ...(status && { status }),
     };
 
@@ -320,7 +310,6 @@ exports.getAttendance = async (req, res) => {
     const data = result[0].data;
     const total = result[0].total[0]?.count || 0;
 
-    // Calculate actual working hours excluding breaks for each record
     const enrichedData = data.map((record) => {
       const workingMs = calculateWorkingMs(record.dutyLogs, record.checkOutTime);
       return {
@@ -343,6 +332,7 @@ exports.getAttendance = async (req, res) => {
   }
 };
 
+// ─── 5. Get Daily Stats ───────────────────────────────────────────────────────
 exports.getStats = async (req, res) => {
   try {
     const date = req.query.date || todayStr();
@@ -351,13 +341,13 @@ exports.getStats = async (req, res) => {
     const totalRiders = await Rider.countDocuments();
     const totalEmployees = totalStaff + totalRiders;
 
-    const records = await attendance.find({ shiftDate: date });
+    // ✅ FIX: changed shiftDate to date
+    const records = await attendance.find({ date: date });
 
     let presentCount = records.length;
     let totalWorkingMs = 0;
 
     for (const record of records) {
-      // ✅ ACCURATE FIX: Uses dutyLogs to exclude breaks/offline time
       totalWorkingMs += calculateWorkingMs(record.dutyLogs, record.checkOutTime);
     }
 
@@ -381,6 +371,7 @@ exports.getStats = async (req, res) => {
   }
 };
 
+// ─── 6. Get Weekly Attendance ─────────────────────────────────────────────────
 exports.getWeekly = async (req, res) => {
   try {
     const days = [];
@@ -390,7 +381,8 @@ exports.getWeekly = async (req, res) => {
       days.push(d.toLocaleDateString("en-CA"));
     }
 
-    const records = await attendance.find({ shiftDate: { $in: days } });
+    // ✅ FIX: changed shiftDate to date
+    const records = await attendance.find({ date: { $in: days } });
 
     const grouped = {};
     for (const record of records) {
@@ -437,6 +429,7 @@ exports.getWeekly = async (req, res) => {
   }
 };
 
+// ─── 7. Get Monthly Attendance ────────────────────────────────────────────────
 exports.getMonthly = async (req, res) => {
   try {
     const now = new Date();
@@ -444,9 +437,11 @@ exports.getMonthly = async (req, res) => {
     const month = String(now.getMonth() + 1).padStart(2, "0");
     const prefix = `${year}-${month}-`;
 
-    const records = await attendance.find({ shiftDate: { $regex: `^${prefix}` } });
+    // ✅ FIX: changed shiftDate to date
+    const records = await attendance.find({ date: { $regex: `^${prefix}` } });
 
-    const distinctDays = [...new Set(records.map((r) => r.shiftDate))];
+    // ✅ FIX: changed r.shiftDate to r.date
+    const distinctDays = [...new Set(records.map((r) => r.date))];
     const workingDays = distinctDays.length || 1;
 
     const grouped = {};
@@ -494,14 +489,12 @@ exports.getMonthly = async (req, res) => {
   }
 };
 
-
-
+// ─── 8. Get Personal Attendance Stats ─────────────────────────────────────────
 exports.getMyAttendanceStats = async (req, res) => {
   try {
     const staffId = getUserId(req);
     if (!staffId) return res.status(401).json({ message: "Unauthorized" });
 
-    // Ensure frontend instantly sees if yesterday's shift was auto-closed
     await checkAndAutoCloseShift(staffId);
 
     const { month } = req.query; 
@@ -522,7 +515,7 @@ exports.getMyAttendanceStats = async (req, res) => {
       if (!shiftEnd) {
         const lastLog = record.dutyLogs[record.dutyLogs.length - 1];
         if (lastLog && lastLog.action === "Available") {
-          effectiveEnd = new Date(); // Live calculation for ongoing shift
+          effectiveEnd = new Date(); 
         }
       }
 
