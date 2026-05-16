@@ -106,33 +106,29 @@ const initSocket = (server) => {
     // =========================================================
     // 📍 RIDER LOCATION UPDATE
     // =========================================================
+  // =========================================================
+    // 📍 RIDER LOCATION UPDATE
+    // =========================================================
     socket.on("rider_location_update", async (data) => {
-
       console.log("\n════════ LOCATION EVENT ════════");
 
       try {
-
         console.log("📍 RAW DATA:", data);
 
-        const { orderId, lat, lng } = data;
+        // 👇 YAHAN HEADING ADD KI HAI
+        const { orderId, lat, lng, heading } = data;
 
         console.log("📦 orderId:", orderId);
         console.log("🌍 lat:", lat);
         console.log("🌍 lng:", lng);
+        console.log("🧭 heading:", heading); // Rider kis direction me dekh raha hai
 
         const parsedLat = Number(lat);
         const parsedLng = Number(lng);
+        const parsedHeading = Number(heading) || 0; // Agar heading na aaye toh 0 maan lo
 
-        console.log("🔢 parsedLat:", parsedLat);
-        console.log("🔢 parsedLng:", parsedLng);
-
-        // =========================================================
-        // ❌ VALIDATION
-        // =========================================================
         if (!orderId || isNaN(parsedLat) || isNaN(parsedLng)) {
-
           console.log("❌ INVALID LOCATION DATA");
-
           return;
         }
 
@@ -140,121 +136,85 @@ const initSocket = (server) => {
         // ⏱️ THROTTLE CHECK
         // =========================================================
         const now = Date.now();
-
-        const lastUpdate =
-          lastUpdateMap.get(orderId) || 0;
-
-        console.log("⏱️ Time Difference:", now - lastUpdate);
+        const lastUpdate = lastUpdateMap.get(orderId) || 0;
 
         if (now - lastUpdate < LOCATION_UPDATE_INTERVAL) {
-
           console.log("⏳ LOCATION THROTTLED");
-
           return;
         }
-
         lastUpdateMap.set(orderId, now);
 
         // =========================================================
         // 🔍 FIND ORDER
         // =========================================================
-        console.log("🔍 Finding Order...");
-
         const order = await Order.findById(orderId);
 
         if (!order) {
-
           console.log("❌ ORDER NOT FOUND");
-
           return;
         }
 
-        console.log("✅ ORDER FOUND");
-
         // =========================================================
-        // 📍 UPDATE LOCATION
+        // 📍 UPDATE LOCATION (Database me bhi heading save kar lo)
         // =========================================================
         order.deliveryPartnerLocation = {
           lat: parsedLat,
           lng: parsedLng,
+          heading: parsedHeading, // 👇 YAHAN BHI ADD KIYA
           updatedAt: new Date(),
         };
-
-        console.log("📍 Updated deliveryPartnerLocation");
 
         // =========================================================
         // 🕐 ETA CALCULATION
         // =========================================================
-       
-
+        let eta = null; // ✅ Fix: Scope issue bachane ke liye declare kiya
         try {
-
           console.log("🕐 Calculating ETA...");
-
-const etaResult = await calculateETA(order);
-eta = etaResult.eta;
-order.eta = eta;
-
+          const etaResult = await calculateETA(order);
+          eta = etaResult.eta;
+          order.eta = eta;
           console.log("✅ ETA:", eta);
-
         } catch (err) {
-
           console.log("❌ ETA ERROR:", err.message);
-
         }
 
         // =========================================================
         // 💾 SAVE ORDER
         // =========================================================
-        console.log("💾 Saving order...");
-
         await order.save();
-
         console.log("✅ ORDER SAVED");
 
         // =========================================================
-        // 👤 USER UPDATE
+        // 👤 USER UPDATE (Customer ko location aur direction bhej rahe)
         // =========================================================
-        console.log("📡 Emitting order_update");
-
         io.to(orderId).emit("order_update", {
           partnerLocation: {
             lat: parsedLat,
             lng: parsedLng,
+            heading: parsedHeading, // 👇 YAHAN SE CUSTOMER APP ME JAYEGI
           },
           eta,
         });
-
         console.log("✅ order_update emitted");
 
         // =========================================================
         // 🧑‍💻 ADMIN UPDATE
         // =========================================================
-        console.log("📡 Emitting admin_rider_location");
-
-        io.to("admin_room").emit(
-          "admin_rider_location",
-          {
-            orderId,
-            lat: parsedLat,
-            lng: parsedLng,
-            eta,
-          }
-        );
-
+        io.to("admin_room").emit("admin_rider_location", {
+          orderId,
+          lat: parsedLat,
+          lng: parsedLng,
+          heading: parsedHeading, // 👇 ADMIN PANEL ME BHI BHEJ DIYA
+          eta,
+        });
         console.log("✅ admin_rider_location emitted");
 
       } catch (err) {
-
         console.log("💥 SOCKET ERROR");
         console.error(err);
-
       }
-
       console.log("═══════════════════════════════\n");
-
     });
-
     // =========================================================
     // ❌ DISCONNECT
     // =========================================================
