@@ -45,7 +45,7 @@ exports.sendOtp = async (req, res) => {
 
     const otp = generateOTP();
     const hashedOtp = hashOTP(otp);
-
+  console.log("Generated OTP:", otp);
     staff.otp = hashedOtp;
     staff.otpExpiresAt = new Date(Date.now() + OTP_EXPIRY);
     await staff.save();
