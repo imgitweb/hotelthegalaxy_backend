@@ -100,6 +100,7 @@ exports.verifyOtpAndSetPassword = async (req, res) => {
         name: staff.name,
         photo: staff.photo,
         isFirstLogin: staff.isFirstLogin,
+        deviceId: staff.deviceId,
       },
     });
   } catch (err) {
