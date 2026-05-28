@@ -1,5 +1,5 @@
 const mongoose = require("mongoose");
-
+const multer = require("multer"); 
 class AppError extends Error {
   constructor(message, statusCode) {
     super(message);
@@ -69,6 +69,17 @@ const errorHandler = (err, req, res, next) => {
   if (err instanceof mongoose.Error.CastError) {
     error = handleCastErrorDB(err);
   }
+  
+if (err instanceof multer.MulterError) {
+
+  if (err.code === "LIMIT_FILE_SIZE") {
+    error = new AppError(
+      "Image size should be less than 50MB",
+      413
+    );
+  }
+}
+
 
   // if (err.code === 11000) {
   //   error = handleDuplicateFieldsDB(err);
