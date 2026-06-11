@@ -40,10 +40,46 @@ function calculateDistance(lat1, lon1, lat2, lon2) {
   return R * c; 
 }
 
+// async function getAvailabilityStatus() {
+//   try {
+//     const avail = await Availability.findOne() || {};
+//     const isEnabled = avail.isOrderingEnabled !== false;
+//     const isTempClosed = avail.isTemporarilyClosed === true;
+//     const start = avail.kitchenStartTime || "10:00";
+//     const end = avail.kitchenEndTime || "22:00";
+//     const reason = avail.reason || "Restaurant is closed right now.";
+
+//     const pureVegMsg = "🌱 100% Pure Veg Kitchen";
+//     const timeMsg = `🕒 Timings: ${start} to ${end}\n${pureVegMsg}`;
+
+//     if (!isEnabled || isTempClosed) {
+//         return { isOpen: false, message: `⚠️ *Currently Closed*\n${reason}\n\n${timeMsg}` };
+//     }
+
+//     const now = new Date();
+//     const formatter = new Intl.DateTimeFormat('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', hour12: false });
+//     const currentTimeStr = formatter.format(now);
+
+//     if (currentTimeStr < start || currentTimeStr > end) {
+//         return { isOpen: false, message: `⚠️ *Kitchen is Closed*\n\n${timeMsg}` };
+//     }
+
+//     return { isOpen: true, message: `🟢 *Kitchen is Open*\n${timeMsg}` };
+//   } catch (e) {
+//     return { isOpen: true, message: "🌱 100% Pure Veg Kitchen" };
+//   }
+// }
+
+
+
 async function getAvailabilityStatus() {
   try {
     const avail = await Availability.findOne() || {};
     const isEnabled = avail.isOrderingEnabled !== false;
+    
+    // Naya check add kiya gaya hai 👇
+    const isWhatsappEnabled = avail.isWhatsappOrderingEnabled !== false; 
+    
     const isTempClosed = avail.isTemporarilyClosed === true;
     const start = avail.kitchenStartTime || "10:00";
     const end = avail.kitchenEndTime || "22:00";
@@ -52,7 +88,8 @@ async function getAvailabilityStatus() {
     const pureVegMsg = "🌱 100% Pure Veg Kitchen";
     const timeMsg = `🕒 Timings: ${start} to ${end}\n${pureVegMsg}`;
 
-    if (!isEnabled || isTempClosed) {
+    // Condition mein !isWhatsappEnabled add kar diya gaya hai 👇
+    if (!isEnabled || !isWhatsappEnabled || isTempClosed) {
         return { isOpen: false, message: `⚠️ *Currently Closed*\n${reason}\n\n${timeMsg}` };
     }
 
@@ -69,6 +106,8 @@ async function getAvailabilityStatus() {
     return { isOpen: true, message: "🌱 100% Pure Veg Kitchen" };
   }
 }
+
+
 
 async function verifyDeliveryLocation(area, landmark) {
   try {

@@ -1,3 +1,4 @@
+const mongoose = require("mongoose");
 const Coupon = require("../models/couponModel.js");
 const CouponUsage = require("../models/couponUsageModel.js");
 const User = require("../models/User.js"); 
@@ -318,10 +319,13 @@ exports.toggleCoupon = async (req, res) => {
     res.status(500).json({ success: false, message: err.message });
   }
 };
+
 exports.deleteCoupon = async (req, res) => {
   try {
     const { id } = req.params;
+    console.log("Delete Request for Coupon ID: ", id);
 
+    // Mongoose ID validation check
     if (!mongoose.Types.ObjectId.isValid(id)) {
       return res.status(400).json({
         success: false,
@@ -329,6 +333,7 @@ exports.deleteCoupon = async (req, res) => {
       });
     }
 
+    // ✅ Permanent Delete (Hard Delete)
     const coupon = await Coupon.findByIdAndDelete(id);
 
     if (!coupon) {
@@ -340,15 +345,17 @@ exports.deleteCoupon = async (req, res) => {
 
     res.json({
       success: true,
-      message: "Coupon deleted successfully",
+      message: "Coupon deleted permanently",
     });
   } catch (err) {
+    console.error("Delete Coupon Error: ", err);
     res.status(500).json({
       success: false,
-      message: err.message,
+      message: err.message || "Internal Server Error",
     });
   }
 };
+
 
 exports.deleteBulkBatch = async (req, res) => {
   try {

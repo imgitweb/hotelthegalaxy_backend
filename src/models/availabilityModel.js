@@ -7,6 +7,11 @@ const availabilitySchema = new mongoose.Schema(
       default: true,
       index: true,
     },
+    // NAYI FIELD ADD KI GAYI HAI 👇
+    isWhatsappOrderingEnabled: {
+      type: Boolean,
+      default: true, // Ise default true ya false rakh sakte hain, aapki requirement ke hisaab se
+    },
     kitchenStartTime: {
       type: String,
       required: true,

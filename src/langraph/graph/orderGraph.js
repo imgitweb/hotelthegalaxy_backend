@@ -4,6 +4,8 @@ const { ChatOpenAI } = require("@langchain/openai");
 const { z } = require("zod");
 
 const Order = require("../../models/User/ordersModel");
+const SubCategory = require("../../models/dining/SubCategory"); // Naya import
+const MenuItem = require("../../models/dining/menuItemmodel"); // Naya import
 
 const {
   checkUserExists, registerNewUser, getOrCreateSession, getActiveOrder, getActiveOrdersToday,
@@ -31,7 +33,7 @@ const llm = new ChatOpenAI({
 
 const IntentSchema = z.object({
   intent: z.enum([
-    "GREETING", "SHOW_MENU", "SELECT_CATEGORY", "SEARCH_ITEM", "ADD_TO_CART", "REMOVE_FROM_CART", 
+    "GREETING", "SHOW_MENU", "SELECT_CATEGORY", "SELECT_SUBCATEGORY", "SEARCH_ITEM", "ADD_TO_CART", "REMOVE_FROM_CART", // Naya Intent SELECT_SUBCATEGORY add kiya
     "CHECKOUT", "PROVIDE_ADDRESS", "PROVIDE_SHARED_LOCATION", "PROVIDE_HOUSE_NUMBER", "SELECT_SAVED_ADDRESS", "PROMPT_NEW_ADDRESS", "PROVIDE_NAME", 
     "CONFIRM_ADDRESS_YES", "CONFIRM_ADDRESS_NO", 
     "COMPLETE_ORDER", "TRACK_ORDER", "ORDER_STATS", 
@@ -47,6 +49,7 @@ const IntentSchema = z.object({
   house_number: z.string().nullable(),
   address_index: z.number().nullable(),
   category_name: z.string().nullable(),
+  sub_category_id: z.string().nullable(), // Nayi field
   search_query: z.string().nullable(),
   item_name: z.string().nullable(),
   quantity: z.number().nullable(),
@@ -120,7 +123,6 @@ async function agentDecisionNode(state) {
     return { ...state, aiIntent: "PROVIDE_SHARED_LOCATION", aiData: { location: locationData } };
   }
 
-  // 🔥 FIX: Check if user directly triggers "Order Now"
   if (msg === "order now" || msg.includes("order now")) {
      return { ...state, aiIntent: "SHOW_MENU", aiData: {} };
   }
@@ -182,6 +184,7 @@ async function agentDecisionNode(state) {
     return { ...state, aiIntent: "HANDLE_QUANTITY_SELECTION", aiData: { quantity: qty } };
   }
 
+  if (msg.startsWith("subcat_")) return { ...state, aiIntent: "SELECT_SUBCATEGORY", aiData: { sub_category_id: msg.replace("subcat_", "") } }; // Naya check for subcategory
   if (msg.startsWith("cat_")) return { ...state, aiIntent: "SELECT_CATEGORY", aiData: { categoryId: msg.replace("cat_", "") } };
   if (msg.startsWith("addr_")) return { ...state, aiIntent: "SELECT_SAVED_ADDRESS", aiData: { addressId: msg.replace("addr_", "") } };
 
@@ -236,7 +239,6 @@ async function actionExecutionNode(state) {
     if (aiIntent === "SHOW_MENU" || inputText.toLowerCase().includes("skip") || inputText.toLowerCase().includes("btn_")) {
         user = await registerNewUser(phone, "Guest");
     } else {
-        // 🔥 FIX: Website Link Included
       let replyText = `👑 *Welcome to Hotel The Galaxy!*\n🌐 Aap website se bhi order kar sakte hain: https://hotelthegalaxy.in\n\n${availStatus.message}\n\nKripya apna naam type karke bhejein,\ntaaki hum aapko behtar serve kar sakein.`;        userContextMemory[phone] = replyText;
         
         let interactive = { 
@@ -267,7 +269,6 @@ async function actionExecutionNode(state) {
     case "PROVIDE_NAME": {
       const extractedName = aiData?.user_name || inputText.trim() || "Guest";
       if (!user) user = await registerNewUser(phone, extractedName);
-      // 🔥 FIX: Website Link Included properly
       replyText = `Aapse milkar accha laga, *${user.fullName}*! 👑\n🌐 Aap website se bhi order kar sakte hain: https://hotelthegalaxy.in\n\n${availStatus.message}\n\nAaj aap kya order karna chahenge?`;
       interactive = { 
         type: "button", 
@@ -280,7 +281,6 @@ async function actionExecutionNode(state) {
 
     case "GREETING": {
       const activeOrders = await getActiveOrdersToday(user._id);
-      // 🔥 FIX: Website Link Included properly
       replyText = `👑 *Welcome back, ${user.fullName}!*\n🌐 Aap website se bhi order kar sakte hain: https://hotelthegalaxy.in\n\n${availStatus.message}\n\nHotel The Galaxy mein aapka swagat hai.\nAaj kya order karna chahenge aap?`;
       let buttons = [{ type: "reply", reply: { id: "btn_menu", title: "🍔 Menu" } }];
       if (activeOrders && activeOrders.length > 0) { buttons.push({ type: "reply", reply: { id: "btn_track", title: "📦 Track" } }); }
@@ -384,6 +384,8 @@ async function actionExecutionNode(state) {
       }
       break;
     }
+
+    // 🔥 LOGIC UPDATE: Yahan agar 10 se zyada item hain toh Sub-Category dikhayenge
     case "SELECT_CATEGORY": {
       let categoryId = aiData?.categoryId; 
       let categoryItems = []; 
@@ -407,9 +409,84 @@ async function actionExecutionNode(state) {
       if (!categoryItems || categoryItems.length === 0) {
         replyText = `Maaf kijiyega, aaj *${categoryName || "is category"}* mein koi item available nahi hai. 👨‍🍳`;
         interactive = { type: "button", body: { text: replyText }, action: { buttons: [{ type: "reply", reply: { id: "btn_menu", title: "🍔 Pura Menu Dekhein" } }] } };
-      } else {
+      } 
+      // Agar item > 10 hain aur wo 'combos' nahi hain toh Sub-categories show karo
+      else if (categoryItems.length > 10 && categoryId !== "combos_virtual") {
+        const subCats = await SubCategory.find({ category: categoryId }).lean();
+        const subCatIds = subCats.map(sc => String(sc._id));
+
+        const menuItems = await MenuItem.find({ subCategory: { $in: subCatIds } }).lean();
+
+        const validSubCats = [];
+        for (const sc of subCats) {
+          const mItemsForSc = menuItems.filter(m => String(m.subCategory) === String(sc._id)).map(m => String(m._id));
+          const availableInSc = categoryItems.filter(ci => mItemsForSc.includes(String(ci._id)));
+          if (availableInSc.length > 0) {
+            validSubCats.push({ _id: sc._id, name: sc.name, count: availableInSc.length });
+          }
+        }
+
+        // Agar >1 subcategory valid hain, toh list dikhao
+        if (validSubCats.length > 1) {
+          const rows = validSubCats.slice(0, 10).map(sc => ({
+            id: `subcat_${sc._id}`,
+            title: sc.name.substring(0, 24),
+            description: `${sc.count} items available`
+          }));
+
+          replyText = `*${categoryName}* mein thode zyada options hain. Kripya sub-category select karein 👇`;
+          interactive = {
+            type: "list",
+            header: { type: "text", text: `📁 ${categoryName}` },
+            body: { text: replyText },
+            action: {
+              button: "📂 Sub-Categories",
+              sections: [{ title: "Select Sub-Category", rows }]
+            }
+          };
+          break;
+        } else {
+          // Agar 1 hi sub-category hai toh sidha uske items dikhao
+          replyText = ""; 
+          interactive = createInteractiveMenu(categoryItems, `📜 ${categoryName || 'Menu'} Items`, "Neeche tap karke item select karein 👇");
+        }
+      } 
+      else {
         replyText = ""; 
         interactive = createInteractiveMenu(categoryItems, `📜 ${categoryName || 'Menu'} Items`, "Neeche tap karke item select karein 👇");
+      }
+      break;
+    }
+
+    // 🔥 NAYA INTENT HANDLER: Jab user sub-category select karega
+    case "SELECT_SUBCATEGORY": {
+      const subCatId = aiData?.sub_category_id;
+      if (!subCatId) {
+         replyText = "Maaf kijiyega, sub-category nahi mili.";
+         interactive = { type: "button", body: { text: replyText }, action: { buttons: [{ type: "reply", reply: { id: "btn_menu", title: "🍔 Pura Menu Dekhein" } }] } };
+         break;
+      }
+
+      const subCat = await SubCategory.findById(subCatId).lean();
+      if (!subCat) {
+         replyText = "Sub-category load karne mein issue aaya.";
+         interactive = { type: "button", body: { text: replyText }, action: { buttons: [{ type: "reply", reply: { id: "btn_menu", title: "🍔 Pura Menu Dekhein" } }] } };
+         break;
+      }
+
+      const menuItems = await MenuItem.find({ subCategory: subCatId }).lean();
+      const menuItemIds = menuItems.map(m => String(m._id));
+
+      const rosterItems = await getTodayRosterItems();
+      // Aaj ki roster list se is subcategory ke saare matching items nikal lo
+      const availableItems = rosterItems.filter(rosterItem => !rosterItem.isCombo && menuItemIds.includes(String(rosterItem._id)));
+
+      if (availableItems.length === 0) {
+         replyText = `Maaf kijiyega, aaj *${subCat.name}* mein koi item available nahi hai.`;
+         interactive = { type: "button", body: { text: replyText }, action: { buttons: [{ type: "reply", reply: { id: "btn_menu", title: "🍔 Pura Menu Dekhein" } }] } };
+      } else {
+         replyText = "";
+         interactive = createInteractiveMenu(availableItems, `📜 ${subCat.name} Items`, "Neeche tap karke item select karein 👇");
       }
       break;
     }
@@ -756,15 +833,11 @@ async function actionExecutionNode(state) {
 
             if (orderStatus !== "pending" && order.paymentStatus !== "pending") {
                 if (["dispatched", "out_for_delivery"].includes(orderStatus) && order.rider) { 
-
-
-const riderPhone = `${order.rider.phone}`; 
-replyText += `🛵 Rider: ${order.rider.name || "Executive"}\n`;
-replyText += `📞 Call Rider: ${riderPhone}\n`;
-
-                 // replyText += `🛵 Rider: ${order.rider.name || "Executive"} (📞 +91${order.rider.phone})\n`; 
-                  const trackingUrl = `https://hotelthegalaxy.in/track-order/${order._id}`;
-                  replyText += `📍 *Track Here:* ${trackingUrl}\n`;
+                   const riderPhone = `${order.rider.phone}`; 
+                   replyText += `🛵 Rider: ${order.rider.name || "Executive"}\n`;
+                   replyText += `📞 Call Rider: ${riderPhone}\n`;
+                   const trackingUrl = `https://hotelthegalaxy.in/track-order/${order._id}`;
+                   replyText += `📍 *Track Here:* ${trackingUrl}\n`;
                 } else { 
                   replyText += `👨‍🍳 Humare chefs preparation kar rahe hain.\n`; 
                 }

@@ -206,20 +206,121 @@ async function getPaymentLinkByOrderId(orderId) {
   } catch (error) { return null; }
 }
 
+// async function getTodayRosterItems() { 
+//   const today = new Date(); today.setHours(0, 0, 0, 0);
+//   const roster = await DailyRoster.findOne({ date: { $gte: today, $lt: new Date(today.getTime() + 24 * 60 * 60 * 1000) } }).populate("items.id"); 
+  
+//   let activeOffers = [];
+//   try {
+//     const now = new Date();
+//     const startOfToday = new Date(now);
+//     startOfToday.setUTCHours(0, 0, 0, 0);
+
+//     activeOffers = await Offer.find({ 
+//         isActive: true,
+//         startDate: { $lte: now }, 
+//         endDate: { $gte: startOfToday }
+//     }).lean();
+//   } catch(e) { console.error("Offer fetch error:", e); }
+
+//   let items = [];
+  
+//   if (roster && roster.items) {
+//     const regularItems = roster.items.filter(item => item.id && item.quantity > 0).map(item => {
+//       let originalPrice = item.id.basePrice;
+//       let finalPrice = originalPrice;
+//       let appliedOffer = null;
+
+//       for(let offer of activeOffers) {
+//         if (offer.items && offer.items.map(i => String(i)).includes(String(item.id._id))) {
+//           if (offer.discountType === "PERCENTAGE") {
+//             finalPrice = finalPrice - (finalPrice * offer.discountValue / 100);
+//           } else if (offer.discountType === "FLAT") {
+//             finalPrice = finalPrice - offer.discountValue;
+//           }
+//           appliedOffer = offer.name;
+//           break; 
+//         }
+//       }
+//       finalPrice = Math.max(0, Math.round(finalPrice));
+
+//       return { 
+//         _id: item.id._id, 
+//         name: item.id.name, 
+//         basePrice: finalPrice, 
+//         originalPrice: originalPrice, 
+//         category: item.id.category, 
+//         maxAllowed: item.quantity, 
+//         availableNow: item.quantity,
+//         isCombo: false,
+//         offerName: appliedOffer
+//       };
+//     });
+//     items.push(...regularItems);
+//   }
+
+//   try {
+//       const combos = await Combo.find({}).populate("items.item", "name").lean();
+      
+//       const comboItems = combos.map(c => {
+//          let originalPrice = c.price;
+//          let finalPrice = originalPrice;
+//          let appliedOffer = null;
+
+//          for(let offer of activeOffers) {
+//            if (offer.combos && offer.combos.map(id => String(id)).includes(String(c._id))) {
+//              if (offer.discountType === "PERCENTAGE") {
+//                finalPrice = finalPrice - (finalPrice * offer.discountValue / 100);
+//              } else if (offer.discountType === "FLAT") {
+//                finalPrice = finalPrice - offer.discountValue;
+//              }
+//              appliedOffer = offer.name;
+//              break;
+//            }
+//          }
+//          finalPrice = Math.max(0, Math.round(finalPrice));
+
+//          let includedNames = "";
+//          if (c.items && c.items.length > 0) {
+//              includedNames = c.items.map(i => i.item && i.item.name ? i.item.name : "").filter(Boolean).join(" + ");
+//          }
+
+//          return {
+//              _id: c._id,
+//              name: `${c.name}`, 
+//              basePrice: finalPrice,
+//              originalPrice: originalPrice,
+//              category: "combos_virtual",
+//              maxAllowed: 10, 
+//              availableNow: 10,
+//              isCombo: true,
+//              offerName: appliedOffer,
+//              includedItems: includedNames 
+//          };
+//       });
+//       items.push(...comboItems);
+//   } catch(e) { console.log("Combo fetch error:", e); }
+
+//   return items;
+// }
+
 async function getTodayRosterItems() { 
-  const today = new Date(); today.setHours(0, 0, 0, 0);
-  const roster = await DailyRoster.findOne({ date: { $gte: today, $lt: new Date(today.getTime() + 24 * 60 * 60 * 1000) } }).populate("items.id"); 
+  const now = new Date();
+  const istOffset = 5.5 * 60 * 60 * 1000;
+  const istTime = new Date(now.getTime() + now.getTimezoneOffset() * 60000 + istOffset);
+  const startOfDay = new Date(Date.UTC(istTime.getFullYear(), istTime.getMonth(), istTime.getDate() - 1, 18, 30, 0));
+  const endOfDay = new Date(startOfDay.getTime() + 24 * 60 * 60 * 1000);
+
+  const roster = await DailyRoster.findOne({ 
+    date: { $gte: startOfDay, $lt: endOfDay } 
+  }).populate("items.id"); 
   
   let activeOffers = [];
   try {
-    const now = new Date();
-    const startOfToday = new Date(now);
-    startOfToday.setUTCHours(0, 0, 0, 0);
-
     activeOffers = await Offer.find({ 
         isActive: true,
         startDate: { $lte: now }, 
-        endDate: { $gte: startOfToday }
+        endDate: { $gte: startOfDay }
     }).lean();
   } catch(e) { console.error("Offer fetch error:", e); }
 
@@ -352,6 +453,7 @@ async function getAvailableCategoriesToday() {
 async function getMenuByCategory(categoryId) { 
   try {
     const rosterItems = await getTodayRosterItems();
+    if (!rosterItems.length) return [];
     
     if (categoryId === "combos_virtual") {
        return rosterItems.filter(item => item.isCombo);
@@ -473,6 +575,7 @@ async function removeItemsFromCart(phone, items) {
   return { cart: session.cart };
 }
 
+// 🔥 FIX: GST Exemption for Beverages + Add Removal Tip
 async function getCartSummaryText(phone, couponCode = null) {
   const session = await getOrCreateSession(phone);
   const cart = session.cart || [];
@@ -483,7 +586,26 @@ async function getCartSummaryText(phone, couponCode = null) {
   const gstSet = setting.gst || { foodGSTPercent: 5, deliveryGSTPercent: 5 };
 
   let cartSummary = cart.map(item => `▪️ ${item.quantity}x ${item.name} - ₹${item.total}`).join("\n");
-  let subtotal = cart.reduce((sum, item) => sum + item.total, 0);
+  
+  // 🔥 Fetch categories and today items to check if item is Beverage
+  const categories = await Category.find({}).lean();
+  const bevCatIds = categories.filter(c => c.name.toLowerCase().includes('beverage') || c.name.toLowerCase().includes('drink') || c.name.toLowerCase().includes('shake')).map(c => String(c._id));
+  const todayItems = await getTodayRosterItems();
+
+  let taxableSubtotal = 0;
+  let subtotal = 0;
+
+  cart.forEach(item => {
+      subtotal += item.total;
+      const tItem = todayItems.find(i => String(i._id) === String(item.menuItemId));
+      let isBev = false;
+      if (tItem && !item.isCombo && tItem.category && bevCatIds.includes(String(tItem.category))) {
+          isBev = true;
+      }
+      if (!isBev) {
+          taxableSubtotal += item.total;
+      }
+  });
   
   let discountMsg = "";
   let discountAmt = 0;
@@ -510,19 +632,23 @@ async function getCartSummaryText(phone, couponCode = null) {
   }
 
   const discountedSubtotal = subtotal - discountAmt;
+  const discountRatio = subtotal > 0 ? (discountAmt / subtotal) : 0;
+  const discountedTaxableSubtotal = taxableSubtotal - (taxableSubtotal * discountRatio);
+
   const isFree = isFreeDelCoupon || dCharge.isFreeDelivery || discountedSubtotal >= (dCharge.freeDeliveryAbove || 500);
   
   let deliveryMsg = isFree ? "FREE! 🎉" : `₹${dCharge.baseFee} (Est.)`;
-  let foodGST = Math.round((discountedSubtotal * (gstSet.foodGSTPercent || 0)) / 100);
+  let foodGST = Math.round((discountedTaxableSubtotal * (gstSet.foodGSTPercent || 0)) / 100);
   let estTotal = discountedSubtotal + foodGST + (isFree ? 0 : dCharge.baseFee);
 
   let text = `🛒 *Aapka Cart:*\n${cartSummary}\n\n🧾 Subtotal: ₹${subtotal}\n`;
   if (discountMsg) text += discountMsg;
-  text += `🍲 Food GST: ₹${foodGST}\n🚚 Est. Delivery: ${deliveryMsg}\n💰 Est. Total: ₹${estTotal}\n\nAur kuch chahiye ya checkout karein?`;
+  text += `🍲 Food GST: ₹${foodGST}\n🚚 Est. Delivery: ${deliveryMsg}\n💰 Est. Total: ₹${estTotal}\n\n💡 *Agar aapko koi item hatana hai, toh type karein: 'Remove 1 <item name>'*\n\nAur kuch chahiye ya checkout karein?`;
 
   return { isEmpty: false, text, hasCoupon: !!discountMsg };
 }
 
+// 🔥 FIX: GST Exemption for Beverages at Checkout
 async function processBotOrderAndPayment(userId, phone, cartItems, addressId, distanceKm = null, couponCode = null) { 
   try {
     const fullAddress = await Address.findById(addressId); if (!fullAddress) return { success: false };
@@ -539,7 +665,24 @@ async function processBotOrderAndPayment(userId, phone, cartItems, addressId, di
     const dCharge = setting.deliveryCharge || { freeDeliveryAbove: 500, isFreeDelivery: false, baseDistance: 5, baseFee: 30, extraPerKmRate: 10, minCharge: 20, maxCharge: 200 };
     const gstSet = setting.gst || { foodGSTPercent: 5, deliveryGSTPercent: 5 };
 
-    const subtotal = cartItems.reduce((sum, item) => sum + item.total, 0); 
+    const categories = await Category.find({}).lean();
+    const bevCatIds = categories.filter(c => c.name.toLowerCase().includes('beverage') || c.name.toLowerCase().includes('drink') || c.name.toLowerCase().includes('shake')).map(c => String(c._id));
+    const todayItems = await getTodayRosterItems();
+
+    let taxableSubtotal = 0;
+    let subtotal = 0;
+
+    cartItems.forEach(item => {
+        subtotal += item.total;
+        const tItem = todayItems.find(i => String(i._id) === String(item.menuItemId));
+        let isBev = false;
+        if (tItem && !item.isCombo && tItem.category && bevCatIds.includes(String(tItem.category))) {
+            isBev = true;
+        }
+        if (!isBev) {
+            taxableSubtotal += item.total;
+        }
+    });
     
     let discountAmt = 0;
     let isFreeDelCoupon = false;
@@ -565,6 +708,8 @@ async function processBotOrderAndPayment(userId, phone, cartItems, addressId, di
     }
 
     const discountedSubtotal = subtotal - discountAmt;
+    const discountRatio = subtotal > 0 ? (discountAmt / subtotal) : 0;
+    const discountedTaxableSubtotal = taxableSubtotal - (taxableSubtotal * discountRatio);
 
     let deliveryCharge = 0;
     if (!isFreeDelCoupon && !dCharge.isFreeDelivery && discountedSubtotal < (dCharge.freeDeliveryAbove || 500)) {
@@ -577,7 +722,7 @@ async function processBotOrderAndPayment(userId, phone, cartItems, addressId, di
     }
     deliveryCharge = Math.round(deliveryCharge);
     
-    const foodGST = Math.round((discountedSubtotal * (gstSet.foodGSTPercent || 0)) / 100);
+    const foodGST = Math.round((discountedTaxableSubtotal * (gstSet.foodGSTPercent || 0)) / 100);
     const deliveryGST = Math.round((deliveryCharge * (gstSet.deliveryGSTPercent || 0)) / 100);
     const totalTax = foodGST + deliveryGST;
 
@@ -683,7 +828,6 @@ async function cancelOrder(userId) {
   return null; 
 }
 
-// 🔥 FIX: EXPORT YAHAN THEEK KIYA GAYA HAI
 async function getUserOrderStats(userId) { 
   try {
     const orders = await Order.find({ user: userId }); 
