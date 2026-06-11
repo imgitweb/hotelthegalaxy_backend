@@ -82,7 +82,20 @@ function getCategoryIcon(catName) {
 }
 
 function createInteractiveMenu(items, listTitle, listBody) {
-  const rows = items.slice(0, 10).map(item => {
+  // 1. Duplicates ko remove karne ka logic (same naam wale items hata dega)
+  const uniqueItems = [];
+  const seenNames = new Set();
+  
+  for (const item of items) {
+    // Agar naam pehle nahi dekha, toh hi list mein add karo
+    if (!seenNames.has(item.name)) {
+      seenNames.add(item.name);
+      uniqueItems.push(item);
+    }
+  }
+
+  // 2. Ab unique items ko list mein map karo
+  const rows = uniqueItems.slice(0, 10).map(item => {
     let descText = `₹${item.basePrice}`;
     if (item.originalPrice && item.originalPrice > item.basePrice) {
         descText = `₹${item.basePrice} (Offer) | was ₹${item.originalPrice}`;
@@ -95,7 +108,8 @@ function createInteractiveMenu(items, listTitle, listBody) {
     }
 
     return {
-      id: `add_${item.name}`, 
+      // Row ID aur Title dono safe limits ke andar hone chahiye
+      id: `add_${item.name.substring(0, 150)}`, 
       title: item.name.substring(0, 24),
       description: descText.substring(0, 72)
     };
