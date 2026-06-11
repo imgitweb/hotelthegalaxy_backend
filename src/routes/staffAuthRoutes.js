@@ -42,7 +42,6 @@ router.post("/checkout",staffAuth, attendanceController.checkoutAttendance) // N
 router.post(
   "/mark-attendance",
   staffAuth,
-  upload.single("photo"),
   attendanceController.markAttendance
 );
 

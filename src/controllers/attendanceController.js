@@ -82,13 +82,83 @@ const checkAndAutoCloseShift = async (userId) => {
 };
 
 // ─── 1. Mark Attendance (Check-In) ───────────────────────────────────────────
+// exports.markAttendance = async (req, res) => {
+//   try {
+//     const { qrData, lat, lng, deviceId, role } = req.body;
+//     const userId = getUserId(req);
+
+//     if (!userId) return res.status(401).json({ success: false, message: "Unauthorized" });
+//     if (!req.file) return res.status(400).json({ success: false, message: "Photo is required" });
+//     if (qrData !== process.env.QR_ID) return res.status(400).json({ success: false, message: "Invalid QR Code" });
+
+//     const activeShift = await checkAndAutoCloseShift(userId);
+    
+//     if (activeShift) {
+//       return res.status(400).json({
+//         success: false,
+//         message: "Aapki ek shift pehle se chal rahi hai. Kripya pehle checkout karein.",
+//       });
+//     }
+
+//     const finalRole = getRole(req, role);
+//     const now = new Date();
+//     const dateString = now.toLocaleDateString("en-CA"); 
+
+//     const existing = await attendance.findOne({ staffId: userId, date: dateString });
+//     if (existing) {
+//       return res.status(400).json({
+//         success: false,
+//         message: "Aapki attendance aaj ke liye pehle hi lag chuki hai!",
+//       });
+//     }
+
+//     const currentHour = now.getHours();
+//     const shiftType = (currentHour >= 22 || currentHour < 6) ? "Night" : "Day";
+
+//     const newAttendance = new attendance({
+//       staffId: userId,
+//       role: finalRole,
+//       shift: shiftType,
+//       date: dateString,
+//       shiftStart: now,         
+//       checkInTime: now,
+//       location: { lat: parseFloat(lat), lng: parseFloat(lng) },
+//       photo: `/uploads/${finalRole.toLowerCase()}/${req.file.filename}`,
+//       deviceId: deviceId || "unknown",
+//       status: "Present",
+//       dutyLogs: [
+//         { action: "CheckIn", time: now, source: "system" },
+//         { action: "Available", time: now, source: "system" },
+//       ],
+//     });
+
+//     await newAttendance.save();
+
+//     const Model = finalRole === "Rider" ? Rider : Staff;
+//     await Model.findByIdAndUpdate(userId, { lastAttendanceAt: now, status: "Available" });
+
+//     return res.status(200).json({
+//       success: true,
+//       message: `Attendance marked successfully ✅`,
+//       data: newAttendance,
+//     });
+//   } catch (error) {
+//     console.error("markAttendance error:", error);
+//     return res.status(500).json({ success: false, message: "Internal Server Error" });
+//   }
+// };
+
+
+
 exports.markAttendance = async (req, res) => {
   try {
     const { qrData, lat, lng, deviceId, role } = req.body;
     const userId = getUserId(req);
 
     if (!userId) return res.status(401).json({ success: false, message: "Unauthorized" });
-    if (!req.file) return res.status(400).json({ success: false, message: "Photo is required" });
+    
+    // REMOVED: Image Validation Line
+    
     if (qrData !== process.env.QR_ID) return res.status(400).json({ success: false, message: "Invalid QR Code" });
 
     const activeShift = await checkAndAutoCloseShift(userId);
@@ -123,7 +193,7 @@ exports.markAttendance = async (req, res) => {
       shiftStart: now,         
       checkInTime: now,
       location: { lat: parseFloat(lat), lng: parseFloat(lng) },
-      photo: `/uploads/${finalRole.toLowerCase()}/${req.file.filename}`,
+      // Photo is not saved or tracked anymore 
       deviceId: deviceId || "unknown",
       status: "Present",
       dutyLogs: [
@@ -147,6 +217,8 @@ exports.markAttendance = async (req, res) => {
     return res.status(500).json({ success: false, message: "Internal Server Error" });
   }
 };
+
+
 
 // ─── 2. Toggle Duty Status (Available ↔ Offline) ─────────────────────────────
 exports.toggleDutyStatus = async (req, res) => {
