@@ -45,12 +45,14 @@ exports.sendOtp = async (req, res) => {
 
     const otp = generateOTP();
     const hashedOtp = hashOTP(otp);
-  console.log("Generated OTP:", otp);
+   console.log("Generated OTP: -- -- - -", otp);
     staff.otp = hashedOtp;
     staff.otpExpiresAt = new Date(Date.now() + OTP_EXPIRY);
     await staff.save();
 
-    await sendAuthTemplate("+" + normalizedPhone, otp);
+    console.log("normalizedPhone - - ", normalizedPhone)
+    
+    await sendAuthTemplate(normalizedPhone, otp);
 
     return res.json({ success: true, message: "OTP sent successfully" });
   } catch (err) {
