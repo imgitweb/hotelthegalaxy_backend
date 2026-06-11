@@ -8,11 +8,11 @@ let io;
 const lastUpdateMap = new Map();
 
 // 🔥 Reduce throttle for realtime tracking
-const LOCATION_UPDATE_INTERVAL = 1000;
+const LOCATION_UPDATE_INTERVAL = 10000;
 
 const initSocket = (server) => {
 
-  io = new Server(server, {
+io = new Server(server, {
     cors: {
       origin: [
         "http://localhost:3000",
@@ -21,6 +21,8 @@ const initSocket = (server) => {
         "http://127.0.0.1:3000",
         "https://uat.hotelthegalaxy.in",
         "https://admin.hotelthegalaxy.in",
+        "https://hotelthegalaxy.in", 
+        "https://www.hotelthegalaxy.in",
         ...(process.env.CLIENT_URL
           ? process.env.CLIENT_URL.split(",")
           : []),
@@ -29,7 +31,6 @@ const initSocket = (server) => {
       methods: ["GET", "POST"],
       credentials: true,
     },
-
     transports: ["polling", "websocket"],
   });
 
