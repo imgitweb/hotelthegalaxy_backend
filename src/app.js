@@ -43,7 +43,7 @@ const attendanceRoutes = require("./routes/attendanceRoutes");
 const deliverySettingRoutes = require("./routes/admin/deliverySettingRoutes")
 const checkItemAvailability = require("./routes/roster.routes.js")
 const departmentRoutes = require("./routes/admin/departmentRoutes.js")
-
+const whatsappMessageRoutes = require("./routes/whatsaap/whatsappMessageRoutes.js")
 
 const couponRoutes = require("./routes/couponRoutes.js");
 const path = require("path");
@@ -157,6 +157,7 @@ app.use("/api/v1/settings", deliverySettingRoutes)
 app.use("/api/v1/admin/departments",departmentRoutes),
 app.use("/api/v1/admin/coupons", couponRoutes);
 app.use("/api/v1/admin/attendance", attendanceRoutes);
+app.use("/api/v1/admin/wa", whatsappMessageRoutes)
 
 app.use(
   "/api/v1/admin/availability",
