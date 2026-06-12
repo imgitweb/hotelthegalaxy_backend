@@ -62,10 +62,9 @@ async function sendTextMessage(to, text) {
 
     // Success hone par Meta Message ID nikal kar silently database mein save karo
     const msgId = response.data?.messages?.[0]?.id;
-    if (msgId) {
-      // background execution bina await ke taaki speed slow na ho
-      saveOutgoingMessageSilent(to, text, msgId, "text");
-    }
+    
+    // background execution bina await ke taaki speed slow na ho
+    saveOutgoingMessageSilent(to, text, msgId, "text");
 
     return { success: true, data: response.data };
   } catch (error) {
@@ -91,10 +90,10 @@ async function sendInteractiveMessage(to, interactiveData) {
 
     // Success hone par Meta Message ID nikal kar interactive text parse karke save karo
     const msgId = response.data?.messages?.[0]?.id;
-    if (msgId) {
-      const fallbackText = interactiveData?.body?.text || "Interactive Menu / Button Clicked";
-      saveOutgoingMessageSilent(to, fallbackText, msgId, "interactive");
-    }
+    const fallbackText = interactiveData?.body?.text || "Interactive Menu / Button Clicked";
+    
+    // background execution bina await ke taaki speed slow na ho
+    saveOutgoingMessageSilent(to, fallbackText, msgId, "interactive");
 
     return { success: true, data: response.data };
   } catch (error) {

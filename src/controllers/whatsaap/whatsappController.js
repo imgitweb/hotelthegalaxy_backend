@@ -63,13 +63,18 @@ exports.sendMessage = async (req, res) => {
       { headers: { Authorization: `Bearer ${TOKEN}`, "Content-Type": "application/json" } }
     );
 
+    // ✅ Safely extract message_id
+    const wamid = metaRes.data?.messages?.[0]?.id;
+
     const newMessage = await WhatsAppMessage.create({
+      message_id: wamid, // 👈 Saved correctly here
       conversation_id: conversationId,
       sender_id: PHONE_ID,
       receiver_id: customer_phone,
-      text,
+      text: text,
       is_from_me: true,
-      message_id: metaRes.data.messages[0].id
+      message_type: "text", // Explicitly define type
+      status: "sent"        // 👈 Status added for webhook tracking
     });
 
     await WhatsAppConversation.findByIdAndUpdate(conversationId, { 
@@ -245,7 +250,8 @@ exports.sendBulkTemplate = async (req, res) => {
           { headers: { Authorization: `Bearer ${TOKEN}`, "Content-Type": "application/json" } }
         );
 
-        const messageId = metaResponse.data.messages[0].id;
+        // ✅ FIX APPLIED HERE: Safely extract ID using optional chaining (?.)
+        const messageId = metaResponse.data?.messages?.[0]?.id;
         const resolvedText = resolveTemplateText(template, rec.variables || []);
 
         // Save Conversation for Chat Inbox (Live Chats)
@@ -260,8 +266,8 @@ exports.sendBulkTemplate = async (req, res) => {
 
         // INDIVIDUAL TRACKING: Ye record batayega ki kis user (rec.phone) ko kon sa template (templateName) gaya hai.
         await WhatsAppMessage.create({
-          message_id: messageId,
-          status: "sent",
+          message_id: messageId, // ✅ Saved correctly here
+          status: "sent",        // ✅ Starting status added for webhook syncing
           conversation_id: conversation._id,
           sender_id: PHONE_ID,
           receiver_id: rec.phone,  // User ka phone number
