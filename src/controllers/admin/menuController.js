@@ -74,6 +74,10 @@ const update = async (req, res) => {
     let imageUrls = [];
     const updatedData = { ...req.body };
 
+    // 🔥 FIX: slug aur name dono hata do, taaki MenuService naya slug banaye hi na!
+    if (updatedData.slug) delete updatedData.slug;
+    if (updatedData.name) delete updatedData.name; 
+
     if (req.files?.length) {
       for (const file of req.files) {
         const result = await uploadToCloudinary(file.buffer, "menu_items");
@@ -97,6 +101,7 @@ const update = async (req, res) => {
       updatedData.isVeg = req.body.isVeg !== "false";
     }
 
+    // Ab call karo, na name jayega na slug ka panga hoga
     const item = await MenuService.update(req.params.id, updatedData);
 
     return res.json({
