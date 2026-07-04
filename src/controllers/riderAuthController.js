@@ -155,6 +155,7 @@ exports.requestOtp = async (req, res, next) => {
 exports.verifyOtp = async (req, res, next) => {
   try {
     const { phone, otp } = req.body;
+    console.log("req.body - - ", req.body);
 
     if (!phone || !otp) {
       return res.status(400).json({ success: false, message: "Phone and OTP are required" });

@@ -3,6 +3,8 @@ const Order = require("../models/User/ordersModel");
 const Rider = require("../models/rider.model");
 const { sendOTP } = require("../services/smsService");
 const getDistanceKm = require("../utils/distanceService");
+const { hashOTP } = require("../utils/otp");
+
 
 const HOTEL_LOCATION = {
   lat: 22.061401,
@@ -216,6 +218,11 @@ exports.verifyDeliveryOTP = async (req, res, next) => {
     const { orderId } = req.params;
     const { otp } = req.body;
     
+    // Safety check to ensure OTP is sent in the request
+    if (!otp) {
+      return res.status(408).json({ success: false, message: "OTP is required" });
+    }
+
     const riderId = req.riderId || req.user?.riderId || req.user?.id;
 
     const order = await Order.findById(orderId).populate("user", "fullName phone");
@@ -230,24 +237,40 @@ exports.verifyDeliveryOTP = async (req, res, next) => {
       return res.status(400).json({ success: false, message: "Order already delivered" });
     }
 
-    const { hashOTP } = require("../utils/otp");
+    // Maximum OTP attempts check has been REMOVED
 
-    if (order.deliveryOTP?.attempts >= order.deliveryOTP?.maxAttempts) {
-      return res.status(400).json({ success: false, message: "Maximum OTP attempts exceeded", attemptsRemaining: 0 });
-    }
+    // // Convert OTP to string and trim to prevent hashing issues with spaces or numbers
+    // const hashedInputOtp = hashOTP(String(otp).trim());
+    // const isMatch = hashedInputOtp === order.deliveryOTP.code;
 
-    const hashedInputOtp = hashOTP(otp);
+    // if (!isMatch) {
+    //   order.deliveryOTP.attempts += 1;
+    //   await order.save();
+      
+    //   return res.status(409).json({ 
+    //     success: false, 
+    //     message: "Invalid OTP." 
+    //   });
+    // }
+
+
+    const hashedInputOtp = hashOTP(String(otp).trim());
+    
+    // --- DEBUGGING KE LIYE YE ADD KIJIYE ---
+    console.log("1. OTP Received from Frontend:", otp);
+    console.log("2. Hash generated right now:", hashedInputOtp);
+    console.log("3. Hash saved in Database:", order.deliveryOTP.code);
+    // ----------------------------------------
 
     const isMatch = hashedInputOtp === order.deliveryOTP.code;
 
     if (!isMatch) {
       order.deliveryOTP.attempts += 1;
       await order.save();
-      const remaining = order.deliveryOTP.maxAttempts - order.deliveryOTP.attempts;
-      return res.status(400).json({ 
+      
+      return res.status(409).json({ 
         success: false, 
-        message: `Invalid OTP. ${remaining} attempts remaining`, 
-        attemptsRemaining: remaining 
+        message: "Invalid OTP." 
       });
     }
 
