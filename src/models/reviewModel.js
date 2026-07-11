@@ -18,7 +18,7 @@ const reviewSchema = new mongoose.Schema(
     menuItem: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "MenuItem",
-      required: true,
+      required: false,
      
     },
 

@@ -182,6 +182,11 @@ const orderSchema = new mongoose.Schema(
       default: null,
     },
 
+    reviewSmsSent: {
+      type: Boolean,
+      default: false
+    },
+    
     rider: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Rider",
