@@ -1,3 +1,9 @@
+
+
+
+
+
+
 const express = require("express");
 const cors = require("cors");
 const helmet = require("helmet");
@@ -9,8 +15,6 @@ const compression = require("compression");
 const cookieParser = require("cookie-parser");
 const httpLogger = require("./middleware/loggerMiddleware");
 const { errorHandler, notFound } = require("./middleware/errorHandler");
-
-// Routes Imports
 const authRoutes = require("./routes/authRoutes");
 const adminRoutes = require("./routes/adminRoutes");
 const fileRoutes = require("./routes/fileRoutes");
@@ -27,9 +31,7 @@ const offerRoutes = require("./routes/offerRoutes");
 const combsRoutes = require("./routes/admin/comboRoutes");
 const adminOrderRoutes = require("./routes/admin/adminOrderRoutes");
 const enquiryRoutes = require("./routes/enquiryRoutes");
-
-// 👇 YAHAN THIK KIYA HAI (Removed curly braces) 👇
-const reviewRoutes = require("./routes/reviewRoutes"); 
+const reviewRoutes = require("./routes/reviewRoutes");
 
 const combsRoute = require("./routes/public/combo.routes");
 const paymentRoutes = require("./routes/paymentRoutes");
@@ -42,22 +44,23 @@ const riderRoutes = require("./routes/admin/rider.routes");
 const riderAuthRoutes = require("./routes/riderRoutes");
 const staffRoutes = require("./routes/admin/staffRoutes");
 const roomRoutes = require("./routes/roomRoutes");
-const staffAttendance = require("./routes/staffAuthRoutes");
-const adminSettingRoutes = require("./routes/adminSettingRoutes");
+const staffAttendance = require("./routes/staffAuthRoutes")
+const adminSettingRoutes = require("./routes/adminSettingRoutes")
 const attendanceRoutes = require("./routes/attendanceRoutes");
-const deliverySettingRoutes = require("./routes/admin/deliverySettingRoutes");
-const checkItemAvailability = require("./routes/roster.routes.js");
-const departmentRoutes = require("./routes/admin/departmentRoutes.js");
-const whatsappMessageRoutes = require("./routes/whatsaap/whatsappMessageRoutes.js");
+const deliverySettingRoutes = require("./routes/admin/deliverySettingRoutes")
+const checkItemAvailability = require("./routes/roster.routes.js")
+const departmentRoutes = require("./routes/admin/departmentRoutes.js")
+const whatsappMessageRoutes = require("./routes/whatsaap/whatsappMessageRoutes.js")
 const scheduleReviewMessages = require("./cron/reviewScheduler");
+
 const couponRoutes = require("./routes/couponRoutes.js");
-
 const path = require("path");
+const router = require("express").Router();
 const app = express();
-
 const allowedOrigins = [
   "http://localhost:3000",
   "http://localhost:3002",
+  "http://localhost:5173",
   "http://localhost:5173",
   "http://127.0.0.1:3000",
   process.env.CLIENT_URL,
@@ -71,7 +74,6 @@ const allowedOrigins = [
   "https://point-spread-souls-norm.trycloudflare.com",
   "wss://admin.hotelthegalaxy.in/*"
 ].filter(Boolean);
-
 const corsOptions = {
   origin: function (origin, callback) {
     if (!origin) return callback(null, true);
@@ -87,7 +89,7 @@ const corsOptions = {
 
 app.use(cors(corsOptions));
 
-// Initialize Cron Scheduler
+
 scheduleReviewMessages();
 
 app.post(
@@ -106,25 +108,19 @@ app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ extended: false }));
 app.use(cookieParser());
 app.use(compression());
-
-// Data Sanitization Middlewares (Ye Error aane se pehle hone chahiye)
-app.use(mongoSanitize());
-app.use(xss());
-
 app.use("/api/chat", chatRoutes);
 app.use(httpLogger);
-
 if (process.env.NODE_ENV === "development") {
   app.use(morgan("dev"));
 }
 
 app.use(
   "/uploads",
-  express.static(path.join(__dirname, "..", "public/uploads"))
+  express.static(path.join(__dirname, ".."  , "public/uploads"))
 );
 console.log(
   "Serving static files from:",
-  path.join(__dirname, "..", "public/uploads")
+  path.join(__dirname,  "..", "public/uploads")
 );
 
 // ========================================================
@@ -147,31 +143,29 @@ app.use("/api/v1/admin/dining", combsRoutes);
 app.use("/api/v1/admin/dining/offers", offerRoutes);
 app.use("/api/v1/admin/dining", adminOrderRoutes);
 app.use("/api/v1/enquiries", enquiryRoutes);
-
-// 👇 API ROUTES FOR REVIEWS 👇
 app.use("/api/v1/reviews", reviewRoutes);
-
 app.use("/api/v1/dining", combsRoute);
-app.use("/api/v1/adminSetting", adminSettingRoutes);
-app.use("/api/v1/roster", checkItemAvailability);
+app.use("/api/v1/adminSetting",adminSettingRoutes);
+app.use("/api/v1/roster",checkItemAvailability);
+
+
 app.use("/api/v1/settings", settingRoutes);
 app.use("/api/webhook", whatsappRoutes);
 app.use("/api/chat", chatRoutes);
+
 app.use("/api/v1/dining/offers", offerRoutepublic);
 app.use("/api/v1/admin/dashboard", dashboardRoutes);
 app.use("/api/v1/admin/riders", riderRoutes);
 
-// 👇 YAHAN EMPTY USE THA, USEY THIK KIYA HAI 👇
-app.use("/api/v1/admin/staff", staffRoutes);
-
-app.use("/api/v1/payment", paymentRoutes);
+app.use("/api/v1/payment" ,paymentRoutes);
 app.use("/api/v1/rooms", roomRoutes);
-app.use("/api/v1/staffAttendance", staffAttendance);
-app.use("/api/v1/settings", deliverySettingRoutes);
-app.use("/api/v1/admin/departments", departmentRoutes);
+app.use("/api/v1/staffAttendance",staffAttendance);
+app.use("/api/v1/admin/staff", staffRoutes);
+app.use("/api/v1/settings", deliverySettingRoutes)
+app.use("/api/v1/admin/departments",departmentRoutes),
 app.use("/api/v1/admin/coupons", couponRoutes);
 app.use("/api/v1/admin/attendance", attendanceRoutes);
-app.use("/api/v1/admin/wa", whatsappMessageRoutes);
+app.use("/api/v1/admin/wa", whatsappMessageRoutes)
 
 app.use(
   "/api/v1/admin/availability",
@@ -184,5 +178,8 @@ app.use("/api/geocode", require("./routes/geocodeRoutes"));
 // ========================================================
 app.use(notFound);
 app.use(errorHandler);
-
+app.use(mongoSanitize());
+app.use(xss());
 module.exports = app;
+
+
