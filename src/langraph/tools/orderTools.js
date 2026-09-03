@@ -197,10 +197,51 @@ async function verifyDeliveryLocation(area, landmark) {
   } catch (error) { return { status: false, message: "Location check karne mein technical error aaya." }; }
 }
 
+// async function verifyLocationByCoords(lat, lng) {
+//   try {
+//     const GOOGLE_API_KEY = process.env.GOOGLE_MAPS_API_KEY;
+//     const setting = await Setting.findOne() || {};
+//     const MAX_DISTANCE_KM = setting.maxDeliveryDistance || 6;
+//     const HOTEL_LAT = process.env.HOTEL_LAT || 22.061401;
+//     const HOTEL_LNG = process.env.HOTEL_LNG || 78.94776;
+
+//     const distRes = await axios.get("https://maps.googleapis.com/maps/api/distancematrix/json", {
+//       params: { origins: `${HOTEL_LAT},${HOTEL_LNG}`, destinations: `${lat},${lng}`, key: GOOGLE_API_KEY },
+//     });
+
+//     const element = distRes.data.rows[0].elements[0];
+//     if (element.status !== "OK") return { status: false, message: "Distance calculate karne mein issue aaya." };
+
+//     const distanceKm = element.distance.value / 1000;
+//     const distanceText = element.distance.text;
+
+//     if (distanceKm > MAX_DISTANCE_KM) {
+//       return { status: false, message: `Aapki location hotel se *${distanceText}* door hai. Humari max delivery range *${MAX_DISTANCE_KM}km* hai.` };
+//     }
+
+//     const geoRes = await axios.get("https://maps.googleapis.com/maps/api/geocode/json", {
+//       params: { latlng: `${lat},${lng}`, key: GOOGLE_API_KEY },
+//     });
+
+//     let formattedAddress = "Shared via WhatsApp";
+//     if (geoRes.data.status === "OK" && geoRes.data.results.length > 0) {
+//       formattedAddress = geoRes.data.results[0].formatted_address;
+//     }
+
+//     if (!formattedAddress.toLowerCase().includes("madhya pradesh")) {
+//       return { status: false, message: `Humari delivery sirf Madhya Pradesh ke andar available hai.` };
+//     }
+
+//     return { status: true, lat, lng, formattedAddress, distanceKm };
+//   } catch (error) {
+//     return { status: false, message: "Location check karne mein technical error aaya." };
+//   }
+// }
+
 async function verifyLocationByCoords(lat, lng) {
   try {
     const GOOGLE_API_KEY = process.env.GOOGLE_MAPS_API_KEY;
-    const setting = await Setting.findOne() || {};
+    const setting = await Setting.findOne() || {}; // Make sure Setting is imported at the top!
     const MAX_DISTANCE_KM = setting.maxDeliveryDistance || 6;
     const HOTEL_LAT = process.env.HOTEL_LAT || 22.061401;
     const HOTEL_LNG = process.env.HOTEL_LNG || 78.94776;
@@ -209,7 +250,19 @@ async function verifyLocationByCoords(lat, lng) {
       params: { origins: `${HOTEL_LAT},${HOTEL_LNG}`, destinations: `${lat},${lng}`, key: GOOGLE_API_KEY },
     });
 
-    const element = distRes.data.rows[0].elements[0];
+    // 1. Root level API error check
+    if (distRes.data.status !== "OK") {
+      console.error("🔥 Google Maps API Error:", distRes.data.error_message || distRes.data.status);
+      return { status: false, message: "System error: Map service unavailable." };
+    }
+
+    // 2. Safe array access
+    const rows = distRes.data.rows;
+    if (!rows || rows.length === 0 || !rows[0].elements || rows[0].elements.length === 0) {
+      return { status: false, message: "Aapki location ka route nahi mil paya." };
+    }
+
+    const element = rows[0].elements[0];
     if (element.status !== "OK") return { status: false, message: "Distance calculate karne mein issue aaya." };
 
     const distanceKm = element.distance.value / 1000;
@@ -234,6 +287,8 @@ async function verifyLocationByCoords(lat, lng) {
 
     return { status: true, lat, lng, formattedAddress, distanceKm };
   } catch (error) {
+    // 3. Exact error print karne ke liye
+    console.error("🔥 verifyLocationByCoords Crash:", error.message);
     return { status: false, message: "Location check karne mein technical error aaya." };
   }
 }
